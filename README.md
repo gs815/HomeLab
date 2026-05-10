@@ -237,8 +237,13 @@ Add to `/etc/fstab` to persist across reboots:
 
 ### 7. Transfer Project Files
 
-On your PC, open a terminal in the folder where you downloaded the project files.
+First, create the project folder structure on the Pi:
+```bash
+mkdir ~/homelab
+mkdir ~/homelab/public
+```
 
+Then, on your PC, open a terminal in the folder where you downloaded the project files:
 ```bash
 # Transfer server.js and package.json
 scp server.js pi@192.168.1.100:~/homelab/server.js
@@ -259,7 +264,7 @@ ls ~/homelab/public/
 
 ### 8. Configure the Server
 
-#### 8.1 Set passwords
+#### Set passwords
 
 ```bash
 nano ~/homelab/server.js
@@ -271,18 +276,6 @@ const CLOUD_PASSWORD = 'your-cloud-password';  // password for HomeCloud
 const VIDEO_PIN      = '1234';                 // numeric PIN for HomeVideo
 ```
 Save with `CTRL+X → Y → Enter`.
-
-#### 8.2 Set Ollama URL in chat.html
-
-```bash
-nano ~/homelab/public/chat.html
-```
-
-Find this line and replace the IP with your Pi's actual static IP:
-```js
-const OLLAMA_URL = 'http://192.168.1.100:11434';
-```
-Save and exit.
 
 ---
 
@@ -382,25 +375,18 @@ ollama run gemma3:1b
 # Type a message, press Enter. Type /bye to exit.
 ```
 
-**Allow Ollama to accept connections from the web interface** (not just localhost):
+Verify Ollama is running and reachable:
 ```bash
-sudo nano /etc/systemd/system/ollama.service
-```
-In the `[Service]` section, add:
-```
-Environment="OLLAMA_HOST=0.0.0.0"
-```
-Save and restart:
-```bash
-sudo systemctl daemon-reload
-sudo systemctl restart ollama
-
-# Verify it's listening
 curl http://localhost:11434/api/tags
 # Should return a JSON list of installed models
 ```
 
-After this, the AI Chat page will automatically detect Ollama and populate the model selector. Any additional models you pull with `ollama pull` will appear there automatically.
+That's all. The AI Chat page communicates with Ollama through the Node.js server proxy (`/api/chat/tags` and `/api/chat/send`), which connects to `localhost:11434` on the Pi. This means:
+- No IP configuration needed in any file
+- Ollama only listens on localhost — it is never exposed on the network
+- Everything works transparently both on your local network and remotely via Tailscale
+
+Any additional models you pull with `ollama pull` will appear automatically in the model selector.
 
 **Model suggestions by hardware:**
 | Hardware | Recommended model |
@@ -505,8 +491,6 @@ The server always reads from `/mnt/hdd/` — no other changes needed.
 
 ### AI Chat doesn't work
 - Check Ollama is running: `sudo systemctl status ollama`
-- Verify `OLLAMA_HOST=0.0.0.0` is set in `/etc/systemd/system/ollama.service`
-- Verify the IP in `chat.html` matches the Pi's IP
 - Restart Ollama: `sudo systemctl restart ollama`
 - On Pi 3B, Ollama can take 30–60 seconds to load a model — be patient
 

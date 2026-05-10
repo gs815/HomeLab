@@ -613,4 +613,48 @@ app.get('/api/system', (req, res) => {
   }
 });
 
+// ═══════════════════════════════════════════════════════════════════════════════
+// CHAT API — proxy to local Ollama (localhost:11434)
+// chat.html uses relative paths so it works both locally and via Tailscale
+// ═══════════════════════════════════════════════════════════════════════════════
+const http = require('http');
+
+function ollamaProxy(method, ollamaPath, body, res) {
+  const bodyStr = body ? JSON.stringify(body) : '';
+  const options = {
+    hostname: 'localhost',
+    port: 11434,
+    path: ollamaPath,
+    method,
+    headers: { 'Content-Type': 'application/json' },
+    timeout: 600000, // 10 minutes — small models can be slow
+  };
+  if (bodyStr) options.headers['Content-Length'] = Buffer.byteLength(bodyStr);
+
+  const req = http.request(options, ollamaRes => {
+    res.status(ollamaRes.statusCode);
+    res.setHeader('Content-Type', ollamaRes.headers['content-type'] || 'application/json');
+    ollamaRes.pipe(res);
+  });
+  req.on('error', () => {
+    if (!res.headersSent) res.status(503).json({ error: 'Ollama unreachable' });
+  });
+  req.on('timeout', () => {
+    req.destroy();
+    if (!res.headersSent) res.status(504).json({ error: 'Ollama timeout' });
+  });
+  if (bodyStr) req.write(bodyStr);
+  req.end();
+}
+
+// List available models
+app.get('/api/chat/tags', (req, res) => {
+  ollamaProxy('GET', '/api/tags', null, res);
+});
+
+// Send message to Ollama
+app.post('/api/chat/send', (req, res) => {
+  ollamaProxy('POST', '/api/chat', req.body, res);
+});
+
 app.listen(PORT, '0.0.0.0', () => console.log(`Homelab → http://0.0.0.0:${PORT}`));

@@ -241,8 +241,9 @@
 </div>
 
 <script>
-// Replace with your Raspberry Pi's IP address
-const OLLAMA_URL = 'http://192.168.1.100:11434';
+// Relative paths — proxied through the Node server, works locally and via Tailscale
+const OLLAMA_TAGS = '/api/chat/tags';
+const OLLAMA_CHAT = '/api/chat/send';
 
 const messagesEl  = document.getElementById('messages');
 const input       = document.getElementById('input');
@@ -257,7 +258,7 @@ let ollamaReady = false;
 // ── Check Ollama connection ───────────────────────────────────────────────────
 async function checkOllama() {
   try {
-    const res  = await fetch(OLLAMA_URL + '/api/tags');
+    const res  = await fetch(OLLAMA_TAGS);
     if (res.ok) {
       const data   = await res.json();
       const models = data.models || [];
@@ -340,7 +341,7 @@ async function send() {
   const bubble = addMsg('ai', '...', true);
 
   try {
-    const res = await fetch(OLLAMA_URL + '/api/chat', {
+    const res = await fetch(OLLAMA_CHAT, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ model: modelSelect.value, messages: history, stream: false }),
