@@ -61,6 +61,23 @@ homelab/
 
 ---
 
+## Screenshots
+
+### 🏠 Home
+![Home](screenshots/index%20screenshot.png)
+
+### 🎬 HomeVideo
+![HomeVideo](screenshots/video%20screenshot.png)
+
+### ☁️ HomeCloud
+![HomeCloud](screenshots/cloud%20screenshot.png)
+
+### 🤖 HomeAI
+![HomeAI](screenshots/chat%20ai%20screenshot.png)
+
+### ⚙️ System Panel
+![System Panel](screenshots/system%20panel%20screenshot.png)
+
 ## Setup Guide
 
 ### 1. Flash the OS
