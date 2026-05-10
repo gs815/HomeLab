@@ -66,11 +66,11 @@ homelab/
 ### 🏠 Home
 ![Home](screenshots/index%20screenshot.png)
 
-### 🎬 HomeVideo
-![HomeVideo](screenshots/video%20screenshot.png)
-
 ### ☁️ HomeCloud
 ![HomeCloud](screenshots/cloud%20screenshot.png)
+
+### 🎬 HomeVideo
+![HomeVideo](screenshots/video%20screenshot.png)
 
 ### 🤖 HomeAI
 ![HomeAI](screenshots/chat%20ai%20screenshot.png)
