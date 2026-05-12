@@ -61,23 +61,6 @@ homelab/
 
 ---
 
-## Screenshots
-
-### 🏠 Home
-![Home](screenshots/index%20screenshot.png)
-
-### ☁️ HomeCloud
-![HomeCloud](screenshots/cloud%20screenshot.png)
-
-### 🎬 HomeVideo
-![HomeVideo](screenshots/video%20screenshot.png)
-
-### 🤖 HomeAI
-![HomeAI](screenshots/chat%20ai%20screenshot.png)
-
-### ⚙️ System Panel
-![System Panel](screenshots/system%20panel%20screenshot.png)
-
 ## Setup Guide
 
 ### 1. Flash the OS
@@ -515,6 +498,133 @@ The server always reads from `/mnt/hdd/` — no other changes needed.
 - Check the temperature: `cat /sys/class/thermal/thermal_zone0/temp` (divide by 1000 for °C)
 - Add a heatsink or fan to the Pi — especially important for sustained video streaming
 - Throttling starts at 80°C on the Pi 3B
+
+---
+
+## Using Multiple Drives with mergerfs
+
+If you run out of space on your HDD, you can add a second (or third) drive without changing a single line of code. [mergerfs](https://github.com/trapexit/mergerfs) merges multiple physical drives into a single virtual path — the server keeps reading and writing to `/mnt/hdd` exactly as before.
+
+```
+/dev/sda1 → /mnt/hdd1  (old HDD)
+/dev/sdb1 → /mnt/hdd2  (new HDD)
+/mnt/hdd  ← mergerfs   (unified view)
+```
+
+New files are automatically written to whichever drive has the most free space. Existing files stay where they are.
+
+> ⚠️ **Pi 3B USB bandwidth limit:** the 4 USB ports share ~25 MB/s total. Two HDDs connected at the same time will split that bandwidth between them.
+
+### 1. Copy data to the new drive
+
+Connect both drives to the Pi. The new one will appear as `/dev/sdb`.
+
+```bash
+lsblk
+# Verify the new drive appears as /dev/sdb or /dev/sdb1
+```
+
+If `/dev/sdb` has no partition yet:
+```bash
+sudo fdisk /dev/sdb
+# press: n → p → 1 → Enter → Enter → w
+```
+
+Format the new drive (skip if it already has your data on it):
+```bash
+sudo mkfs.ext4 /dev/sdb1
+# ⚠ This wipes all data on the new drive
+```
+
+Stop the server, mount the new drive and copy everything across:
+```bash
+pm2 stop homelab
+sudo mkdir /mnt/hdd2
+sudo mount /dev/sdb1 /mnt/hdd2
+sudo chown -R pi:pi /mnt/hdd2
+cp -a /mnt/hdd/* /mnt/hdd2/
+ls /mnt/hdd2        # verify files arrived
+pm2 start homelab
+```
+
+> If the data was already copied from a PC, skip the `pm2 stop / cp -a / pm2 start` steps and go straight to step 2.
+
+### 2. Install mergerfs
+
+```bash
+sudo apt update && sudo apt install -y mergerfs
+mergerfs --version
+```
+
+### 3. Reconfigure mount points
+
+```bash
+sudo mkdir -p /mnt/hdd1   # mount point for old HDD
+# /mnt/hdd2 already exists from step 1
+# /mnt/hdd  already exists
+
+pm2 stop homelab
+sudo umount /mnt/hdd
+sudo mount /dev/sda1 /mnt/hdd1
+sudo mount /dev/sdb1 /mnt/hdd2   # skip if already mounted
+```
+
+### 4. Create the unified view
+
+```bash
+sudo mergerfs -o defaults,allow_other,use_ino,category.create=mfs \
+    /mnt/hdd1:/mnt/hdd2 /mnt/hdd
+```
+
+Verify it works:
+```bash
+ls /mnt/hdd      # should show files from both drives
+df -h /mnt/hdd   # should show combined total space
+pm2 start homelab
+```
+
+### 5. Persist across reboots (fstab)
+
+Find the UUIDs of both drives:
+```bash
+sudo blkid /dev/sda1   # old HDD UUID
+sudo blkid /dev/sdb1   # new HDD UUID
+```
+
+Edit fstab:
+```bash
+sudo nano /etc/fstab
+```
+
+Replace the existing single HDD line with these three (use your actual UUIDs):
+```
+UUID=OLD-HDD-UUID  /mnt/hdd1  auto  defaults,nofail  0  0
+UUID=NEW-HDD-UUID  /mnt/hdd2  auto  defaults,nofail  0  0
+/mnt/hdd1:/mnt/hdd2  /mnt/hdd  fuse.mergerfs  defaults,allow_other,use_ino,category.create=mfs,nofail  0  0
+```
+
+Test and reboot:
+```bash
+sudo mount -a    # no output = correct
+sudo reboot
+```
+
+After reboot verify:
+```bash
+df -h /mnt/hdd   # should show combined space
+pm2 status       # homelab should be online
+```
+
+### Adding a third drive
+
+Just add `/mnt/hdd3` to the mergerfs line in fstab:
+```
+/mnt/hdd1:/mnt/hdd2:/mnt/hdd3  /mnt/hdd  fuse.mergerfs  defaults,allow_other,use_ino,category.create=mfs,nofail  0  0
+```
+
+### Removing a drive
+
+Move its files to another drive first, then remove it from fstab.
 
 ---
 
