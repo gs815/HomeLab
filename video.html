@@ -4,9 +4,8 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Video · Homevideo</title>
-  <link rel="preconnect" href="https://fonts.googleapis.com">
   <style>
-    @import url('https://fonts.googleapis.com/css2?family=Bebas+Neue&family=DM+Sans:wght@300;400;500;600&display=swap');
+    /* Font di sistema — nessuna richiesta a internet */
 
     :root {
       --bg:        #0a0a0f;
@@ -25,7 +24,7 @@
     body {
       background: var(--bg);
       color: var(--text);
-      font-family: 'DM Sans', 'Segoe UI', system-ui, sans-serif;
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Helvetica Neue', Arial, system-ui, sans-serif;
       min-height: 100vh;
       overflow-x: hidden;
     }
@@ -46,7 +45,7 @@
       border-bottom: 1px solid var(--border);
     }
     .topbar-logo {
-      font-family: 'Bebas Neue', sans-serif;
+      font-family: Impact, 'Arial Narrow', Arial, sans-serif;
       font-size: 1.6rem;
       letter-spacing: 3px;
       color: var(--accent);
@@ -131,7 +130,7 @@
       margin-bottom: 20px;
     }
     .section-title {
-      font-family: 'Bebas Neue', sans-serif;
+      font-family: Impact, 'Arial Narrow', Arial, sans-serif;
       font-size: 1.5rem;
       letter-spacing: 2px;
       color: var(--text);
@@ -319,7 +318,7 @@
     }
     .modal-meta { flex: 1; }
     .modal-title {
-      font-family: 'Bebas Neue', sans-serif;
+      font-family: Impact, 'Arial Narrow', Arial, sans-serif;
       font-size: 1.8rem;
       letter-spacing: 1px;
       line-height: 1;
@@ -341,7 +340,7 @@
 
     .modal-body { padding: 20px 24px 24px; }
     .season-label {
-      font-family: 'Bebas Neue', sans-serif;
+      font-family: Impact, 'Arial Narrow', Arial, sans-serif;
       font-size: 1rem;
       letter-spacing: 1.5px;
       color: var(--muted);
@@ -590,7 +589,7 @@
       border-radius: 20px; padding: 48px 40px; width: 100%; max-width: 380px; text-align: center;
     }
     .login-icon { font-size: 3rem; margin-bottom: 16px; }
-    .login-title { font-family: 'Bebas Neue', sans-serif; font-size: 2rem; letter-spacing: 3px; margin-bottom: 6px; }
+    .login-title { font-family: Impact, 'Arial Narrow', Arial, sans-serif; font-size: 2rem; letter-spacing: 3px; margin-bottom: 6px; }
     .login-title span { color: var(--accent); }
     .login-sub { font-size: 0.85rem; color: var(--muted); margin-bottom: 32px; }
     .login-input {
