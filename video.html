@@ -563,7 +563,8 @@
     }
     .subs-item:hover { background: var(--surface2); }
     .subs-item.active { color: var(--accent); font-weight: 600; }
-    #btnSubs { font-size: 0.75rem; font-weight: 700; letter-spacing: .5px; padding: 6px 10px; }
+    #btnSubs  { font-size: 0.75rem; font-weight: 700; letter-spacing: .5px; padding: 6px 10px; }
+    #btnAudio { font-size: 0.75rem; font-weight: 700; letter-spacing: .5px; padding: 6px 10px; }
 
     /* ── MOBILE SEARCH ── */
     .btn-mobile-search {
@@ -742,6 +743,10 @@
       <div class="ctrl-wrap" id="subsWrap" style="display:none">
         <button class="ctrl-btn" id="btnSubs" title="Subtitles">CC</button>
         <div class="subs-menu" id="subsMenu"></div>
+      </div>
+      <div class="ctrl-wrap" id="audioWrap" style="display:none">
+        <button class="ctrl-btn" id="btnAudio" title="Audio track">🔊</button>
+        <div class="subs-menu" id="audioMenu"></div>
       </div>
       <button class="ctrl-btn" id="btnFs" title="Fullscreen">⛶</button>
     </div>
@@ -1081,9 +1086,111 @@ function selectSub(idx, tracks) {
 
 btnSubs.addEventListener('click', e => {
   e.stopPropagation();
+  audioMenu.classList.remove('open');
   subsMenu.classList.toggle('open');
 });
-player.addEventListener('click', () => subsMenu.classList.remove('open'));
+player.addEventListener('click', () => { subsMenu.classList.remove('open'); audioMenu.classList.remove('open'); });
+
+// ── Audio tracks ──────────────────────────────────────────────────────────────
+const audioWrap = document.getElementById('audioWrap');
+const btnAudio  = document.getElementById('btnAudio');
+const audioMenu = document.getElementById('audioMenu');
+let currentAudioTrack = 0;
+let audioTracks       = [];
+let audioFilePath     = '';
+let audioStreamOffset = 0;
+let savedDuration     = 0;
+let isAudioStream     = false; // explicit flag — not derived from player.duration which oscillates during fragment loading
+
+function audioLabel(t) {
+  const lang  = t.language !== 'und' ? t.language.toUpperCase() : '?';
+  const title = t.title ? ` — ${t.title}` : '';
+  const ch    = t.channels === 1 ? ' (mono)' : t.channels >= 6 ? ' (5.1)' : '';
+  return `${lang}${title}${ch}`;
+}
+
+async function loadAudioTracks(filePath) {
+  audioWrap.style.display = 'none';
+  audioMenu.classList.remove('open');
+  currentAudioTrack = 0;
+  audioTracks       = [];
+  audioFilePath     = '';
+  audioStreamOffset = 0;
+  isAudioStream     = false;
+  if (filePath.split('.').pop().toLowerCase() !== 'mkv') return;
+  try {
+    const res    = await fetch('/api/video/audio/tracks?path=' + encodeURIComponent(filePath) + '&token=' + encodeURIComponent(videoToken));
+    const tracks = await res.json();
+    if (!Array.isArray(tracks) || tracks.length < 2) return; // only show if 2+ tracks
+
+    audioMenu.innerHTML = '';
+    tracks.forEach((t, i) => {
+      const item = document.createElement('div');
+      item.className = 'subs-item' + (i === 0 ? ' active' : '');
+      item.textContent = audioLabel(t);
+      item.dataset.idx = i;
+      item.addEventListener('click', () => selectAudio(i, tracks, filePath));
+      audioMenu.appendChild(item);
+    });
+
+    audioWrap.style.display = 'block';
+  } catch {}
+}
+
+function selectAudio(idx, tracks, filePath) {
+  currentAudioTrack = idx;
+  audioTracks       = tracks;
+  audioFilePath     = filePath;
+  audioMenu.classList.remove('open');
+
+  audioMenu.querySelectorAll('.subs-item').forEach((el, i) => el.classList.toggle('active', i === idx));
+
+  const pos    = absTime(); // read position while still in normal mode (or previous audio mode)
+  const paused = player.paused;
+  audioStreamOffset = pos;
+  isAudioStream     = true; // from here absTime() uses the offset
+  const url    = '/stream-audio/' + filePath.split('/').map(encodeURIComponent).join('/')
+               + '?track=' + tracks[idx].trackIndex
+               + '&start=' + pos.toFixed(3)
+               + '&token=' + encodeURIComponent(videoToken);
+  player.src = url;
+  player.load();
+  if (!paused) {
+    player.addEventListener('canplay', function resume() {
+      player.removeEventListener('canplay', resume);
+      player.play().catch(() => {});
+    });
+  }
+}
+
+btnAudio.addEventListener('click', e => {
+  e.stopPropagation();
+  subsMenu.classList.remove('open');
+  audioMenu.classList.toggle('open');
+});
+
+// ── Audio stream mode helpers ─────────────────────────────────────────────────
+function inAudioMode()       { return isAudioStream; }
+function absTime()           { return isAudioStream ? audioStreamOffset + player.currentTime : player.currentTime; }
+function effectiveDuration() { return isAudioStream ? savedDuration : player.duration; }
+
+function seekAudioStream(newAbsTime) {
+  if (!audioTracks.length) return;
+  audioStreamOffset = newAbsTime;
+  const paused = player.paused;
+  const url = '/stream-audio/' + audioFilePath.split('/').map(encodeURIComponent).join('/')
+            + '?track=' + audioTracks[currentAudioTrack].trackIndex
+            + '&start=' + newAbsTime.toFixed(3)
+            + '&token=' + encodeURIComponent(videoToken);
+  player.src = url;
+  player.load();
+  if (!paused) {
+    player.addEventListener('canplay', function resume() {
+      player.removeEventListener('canplay', resume);
+      player.play().catch(() => {});
+    });
+  }
+}
 
 // ── Player functions ─────────────────────────────────────────────────────────
 function playVideo(file, title) {
@@ -1095,6 +1202,7 @@ function playVideo(file, title) {
   updatePlayBtn();
   showUI();
   loadSubtracks(file);
+  loadAudioTracks(file);
 }
 
 function closePlayer() {
@@ -1104,7 +1212,9 @@ function closePlayer() {
   playerBd.classList.remove('hide-ui');
   removeTrackElement();
   subsWrap.style.display = 'none';
+  audioWrap.style.display = 'none';
   currentSubsPath = '';
+  audioTracks = []; audioFilePath = ''; audioStreamOffset = 0; savedDuration = 0; isAudioStream = false;
 }
 
 document.getElementById('playerClose').addEventListener('click', closePlayer);
@@ -1124,18 +1234,23 @@ function updatePlayBtn() { btnPlay.textContent = player.paused ? '▶' : '⏸'; 
 
 // Seek
 player.addEventListener('timeupdate', () => {
-  if (!player.duration) return;
-  const pct = (player.currentTime / player.duration) * 100;
-  progressFill.style.width = pct + '%';
-  timeElapsed.textContent  = fmt(player.currentTime);
+  const dur = effectiveDuration();
+  if (!dur) return;
+  progressFill.style.width = Math.min(100, absTime() / dur * 100) + '%';
+  timeElapsed.textContent  = fmt(absTime());
 });
 player.addEventListener('loadedmetadata', () => {
-  timeDuration.textContent = fmt(player.duration);
+  if (!isAudioStream && isFinite(player.duration)) savedDuration = player.duration;
+  timeDuration.textContent = fmt(savedDuration || player.duration);
 });
 
 progressBar.addEventListener('click', e => {
-  const rect = progressBar.getBoundingClientRect();
-  player.currentTime = ((e.clientX - rect.left) / rect.width) * player.duration;
+  const rect    = progressBar.getBoundingClientRect();
+  const dur     = effectiveDuration();
+  if (!dur) return;
+  const newTime = ((e.clientX - rect.left) / rect.width) * dur;
+  if (inAudioMode()) seekAudioStream(newTime);
+  else player.currentTime = newTime;
 });
 
 // Volume
@@ -1152,8 +1267,14 @@ function updateMuteBtn() {
 }
 
 // Skip
-btnRew.addEventListener('click', () => { player.currentTime -= 10; });
-btnFwd.addEventListener('click', () => { player.currentTime += 10; });
+btnRew.addEventListener('click', () => {
+  if (inAudioMode()) seekAudioStream(Math.max(0, absTime() - 10));
+  else player.currentTime -= 10;
+});
+btnFwd.addEventListener('click', () => {
+  if (inAudioMode()) seekAudioStream(absTime() + 10);
+  else player.currentTime += 10;
+});
 
 // Fullscreen
 btnFs.addEventListener('click', () => {
@@ -1166,8 +1287,8 @@ document.addEventListener('keydown', e => {
   if (!playerBd.classList.contains('open')) return;
   if (e.key === 'Escape')       { if (!document.fullscreenElement) closePlayer(); }
   if (e.key === ' ')            { e.preventDefault(); player.paused ? player.play() : player.pause(); updatePlayBtn(); }
-  if (e.key === 'ArrowLeft')    { player.currentTime -= 10; }
-  if (e.key === 'ArrowRight')   { player.currentTime += 10; }
+  if (e.key === 'ArrowLeft')    { if (inAudioMode()) seekAudioStream(Math.max(0, absTime() - 10)); else player.currentTime -= 10; }
+  if (e.key === 'ArrowRight')   { if (inAudioMode()) seekAudioStream(absTime() + 10); else player.currentTime += 10; }
   if (e.key === 'ArrowUp')      { player.volume = Math.min(1, player.volume + 0.1); volumeSlider.value = player.volume; }
   if (e.key === 'ArrowDown')    { player.volume = Math.max(0, player.volume - 0.1); volumeSlider.value = player.volume; }
   if (e.key === 'm')            { player.muted = !player.muted; updateMuteBtn(); }
@@ -1188,7 +1309,7 @@ function showUI() {
 
 // ── Utilities ────────────────────────────────────────────────────────────────
 function fmt(s) {
-  if (!s || isNaN(s)) return '0:00';
+  if (!s || isNaN(s) || !isFinite(s)) return '0:00';
   const m = Math.floor(s / 60);
   const sec = Math.floor(s % 60);
   return `${m}:${String(sec).padStart(2, '0')}`;

@@ -193,6 +193,78 @@ app.get('/api/video/subtitles/stream', videoAuth, (req, res) => {
   req.on('close', () => { try { ff.kill(); } catch {} });
 });
 
+// ── MKV audio tracks ──────────────────────────────────────────────────────────
+
+// List audio tracks
+app.get('/api/video/audio/tracks', videoAuth, (req, res) => {
+  try {
+    const filePath = safePath(VIDEO_ROOT, req.query.path || '');
+    if (!fs.existsSync(filePath)) return res.status(404).json({ error: 'File not found' });
+    if (path.extname(filePath).toLowerCase() !== '.mkv') return res.json([]);
+    const out  = execSync(
+      `ffprobe -v quiet -print_format json -show_streams -select_streams a "${filePath}"`,
+      { timeout: 10000 }
+    ).toString();
+    const data = JSON.parse(out);
+    const tracks = (data.streams || []).map((s, i) => ({
+      trackIndex: i,
+      language: (s.tags && (s.tags.language || s.tags.LANGUAGE)) || 'und',
+      title:    (s.tags && (s.tags.title    || s.tags.TITLE))    || '',
+      codec:    s.codec_name,
+      channels: s.channels || 2,
+    }));
+    res.json(tracks);
+  } catch { res.json([]); }
+});
+
+// Stream video with selected audio track re-encoded to AAC (ffmpeg on-the-fly)
+app.get('/stream-audio/*', videoAuth, (req, res) => {
+  let filePath;
+  try { filePath = safePath(VIDEO_ROOT, req.params[0]); }
+  catch { return res.status(400).send('Invalid path'); }
+  if (!fs.existsSync(filePath)) return res.status(404).send('File not found');
+
+  const trackIndex = parseInt(req.query.track || '0', 10);
+  const startSec   = parseFloat(req.query.start  || '0');
+
+  // Detect audio codec of the requested track to decide whether to copy or transcode
+  const BROWSER_AUDIO = new Set(['aac', 'mp3', 'opus']);
+  let audioCodec = 'aac'; // fallback: transcode
+  try {
+    const probe = execSync(
+      `ffprobe -v quiet -print_format json -show_streams -select_streams a "${filePath}"`,
+      { timeout: 10000 }
+    ).toString();
+    const streams = JSON.parse(probe).streams || [];
+    if (streams[trackIndex]) {
+      const codec = streams[trackIndex].codec_name;
+      if (BROWSER_AUDIO.has(codec)) audioCodec = 'copy';
+    }
+  } catch {}
+
+  res.setHeader('Content-Type', 'video/mp4');
+  res.setHeader('Transfer-Encoding', 'chunked');
+
+  const args = [];
+  if (startSec > 0) args.push('-ss', String(startSec));
+  args.push(
+    '-i', filePath,
+    '-map', '0:v:0',
+    '-map', `0:a:${trackIndex}`,
+    '-c:v', 'copy',
+    '-c:a', audioCodec,
+    ...(audioCodec === 'aac' ? ['-b:a', '192k'] : []),
+    '-movflags', 'frag_keyframe+empty_moov+faststart',
+    '-f', 'mp4',
+    'pipe:1',
+  );
+  const ff = spawn('ffmpeg', args);
+  ff.stdout.pipe(res);
+  ff.stderr.on('data', () => {});
+  ff.on('error', () => { if (!res.headersSent) res.status(500).end(); });
+  req.on('close', () => { try { ff.kill('SIGKILL'); } catch {} });
+});
+
 // ═══════════════════════════════════════════════════════════════════════════════
 // CLOUD API
 // ═══════════════════════════════════════════════════════════════════════════════
