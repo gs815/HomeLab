@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Video · Homevideo</title>
   <style>
-    /* System fonts */
+    /* Font di sistema — nessuna richiesta a internet */
 
     :root {
       --bg:        #0a0a0f;
@@ -565,6 +565,41 @@
     .subs-item.active { color: var(--accent); font-weight: 600; }
     #btnSubs { font-size: 0.75rem; font-weight: 700; letter-spacing: .5px; padding: 6px 10px; }
 
+    /* ── MOBILE SEARCH ── */
+    .btn-mobile-search {
+      display: none;
+      background: var(--surface2);
+      border: 1px solid var(--border);
+      border-radius: 20px;
+      color: var(--muted);
+      padding: 7px 10px;
+      cursor: pointer;
+      flex-shrink: 0;
+      align-items: center;
+      transition: border-color .2s, color .2s;
+    }
+    .btn-mobile-search:hover { border-color: var(--accent); color: var(--text); }
+    .mobile-search-bar { display: none; }
+    .mobile-search-input {
+      flex: 1;
+      background: var(--surface2);
+      border: 1px solid var(--border);
+      border-radius: 20px;
+      color: var(--text);
+      padding: 9px 16px;
+      font-size: 1rem;
+      font-family: inherit;
+      outline: none;
+      transition: border-color .2s;
+      -webkit-appearance: none;
+    }
+    .mobile-search-input:focus { border-color: var(--accent); }
+    .mobile-search-input::placeholder { color: var(--muted); }
+    .mobile-search-close {
+      background: none; border: none; color: var(--muted);
+      font-size: 1.1rem; cursor: pointer; padding: 6px; flex-shrink: 0;
+    }
+
     /* ── SCROLLBAR ── */
     ::-webkit-scrollbar { width: 6px; }
     ::-webkit-scrollbar-track { background: transparent; }
@@ -574,12 +609,23 @@
     @media (max-width: 600px) {
       .volume-wrap { display: none; } /* mobile browsers don't allow JS volume control */
       :root { --card-w: 130px; }
-      .topbar { padding: 0 8px; gap: 6px; }
-      .topbar-logo { font-size: 1rem; letter-spacing: 1px; }
+      .topbar { padding: 0 16px; gap: 12px; }
+      .topbar-logo { font-size: 1.1rem; letter-spacing: 1px; }
       .search-wrap { display: none; }
+      .btn-mobile-search { display: flex; }
+      .mobile-search-bar {
+        display: flex; position: fixed; top: 62px; left: 0; right: 0;
+        z-index: 99; background: var(--bg); border-bottom: 1px solid var(--border);
+        padding: 8px 12px; gap: 8px; align-items: center;
+        transform: translateY(-100%); opacity: 0; pointer-events: none;
+        transition: transform .2s ease, opacity .2s ease;
+      }
+      .mobile-search-bar.open { transform: translateY(0); opacity: 1; pointer-events: all; }
+      body.search-open .main { padding-top: 130px; }
       .main { padding: 80px 16px 40px; }
-      .tabs { gap: 2px; }
-      .tab { padding: 5px 10px; font-size: 0.78rem; }
+      .tabs { gap: 2px; overflow-x: auto; -webkit-overflow-scrolling: touch; flex-shrink: 1; }
+      .tabs::-webkit-scrollbar { display: none; }
+      .tab { padding: 5px 10px; font-size: 0.78rem; flex-shrink: 0; }
     }
 
     /* ── LOGIN ── */
@@ -644,7 +690,19 @@
     </svg>
     <input type="text" id="search" placeholder="Search...">
   </div>
+  <button class="btn-mobile-search" id="btnMobileSearch" title="Search" aria-label="Search">
+    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
+      <circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/>
+    </svg>
+  </button>
 </header>
+
+<div class="mobile-search-bar" id="mobileSearchBar">
+  <input type="search" class="mobile-search-input" id="mobileSearchInput"
+         placeholder="Search..." autocomplete="off" autocorrect="off"
+         autocapitalize="off" spellcheck="false">
+  <button class="mobile-search-close" id="btnMobileSearchClose" aria-label="Close">✕</button>
+</div>
 
 <!-- MAIN -->
 <main class="main" id="main"></main>
@@ -1176,6 +1234,40 @@ document.getElementById('search').addEventListener('input', e => {
   }
   render();
 });
+
+// ── Mobile Search ──────────────────────────────────────────────────────────
+(function() {
+  const btnSearch = document.getElementById('btnMobileSearch');
+  const searchBar = document.getElementById('mobileSearchBar');
+  const mInput    = document.getElementById('mobileSearchInput');
+  const btnClose  = document.getElementById('btnMobileSearchClose');
+
+  function closeSearch() {
+    searchBar.classList.remove('open');
+    document.body.classList.remove('search-open');
+    mInput.value = ''; searchQ = ''; render();
+  }
+
+  btnSearch.addEventListener('click', () => {
+    searchBar.classList.add('open');
+    document.body.classList.add('search-open');
+    setTimeout(() => mInput.focus(), 150);
+  });
+  btnClose.addEventListener('click', closeSearch);
+  mInput.addEventListener('input', e => {
+    searchQ = e.target.value;
+    if (searchQ && activeTab !== 'tutti') {
+      document.querySelectorAll('.tab').forEach(b => b.classList.remove('active'));
+      document.querySelector('[data-cat="tutti"]').classList.add('active');
+      activeTab = 'tutti';
+    }
+    render();
+  });
+  mInput.addEventListener('keydown', e => {
+    if (e.key === 'Enter') mInput.blur();
+    if (e.key === 'Escape') closeSearch();
+  });
+})();
 
 // ── Init ──────────────────────────────────────────────────────────────────────
 // (init is handled by the auth logic at the top of the script)
