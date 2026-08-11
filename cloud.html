@@ -203,6 +203,7 @@
     .up-bar-wrap { background: var(--surface2); border-radius: 4px; height: 6px; overflow: hidden; }
     .up-bar { height: 100%; background: var(--accent); border-radius: 4px; transition: width .2s; width: 0%; }
     .up-pct { font-size: 0.75rem; color: var(--muted); margin-top: 6px; text-align: right; }
+    .up-error { display: none; font-size: 0.78rem; color: var(--danger); margin-top: 10px; padding-top: 10px; border-top: 1px solid var(--border); line-height: 1.4; max-width: 320px; }
 
     ::-webkit-scrollbar { width: 6px; }
     ::-webkit-scrollbar-track { background: transparent; }
@@ -417,6 +418,7 @@
   <div class="up-file" id="upFile"></div>
   <div class="up-bar-wrap"><div class="up-bar" id="upBar"></div></div>
   <div class="up-pct" id="upPct">0%</div>
+  <div class="up-error" id="upError"></div>
 </div>
 
 <!-- PREVIEW OVERLAY -->
@@ -783,7 +785,12 @@ document.getElementById('previewBackdrop').addEventListener('click', e => {
       e.target === document.getElementById('previewBody')) closePreview();
 });
 
-// ── Upload ────────────────────────────────────────────────────────────────────
+// ── Upload (chunked, with automatic per-chunk retry) ─────────────────────────
+// Large files are split into small chunks, each sent as its own short-lived
+// request. If one chunk fails (Wi-Fi blip, router timeout, etc.) only that
+// chunk is retried — the whole file no longer has to restart from zero, and a
+// failure that still can't recover is now shown to you instead of failing
+// silently. See the matching comment in server.js for the full "why".
 document.getElementById('btnUpload').addEventListener('click', () => document.getElementById('fileInput').click());
 document.getElementById('fileInput').addEventListener('change', e => {
   uploadFiles(Array.from(e.target.files));
@@ -799,6 +806,9 @@ document.addEventListener('drop', e => {
   if (files.length) uploadFiles(files);
 });
 
+const CHUNK_SIZE        = 8 * 1024 * 1024; // 8 MB per request — keeps each request short-lived
+const MAX_CHUNK_RETRIES = 5;
+
 let currentUploadXhr = null;
 let uploadCancelled  = false;
 
@@ -807,11 +817,86 @@ document.getElementById('btnCancelUpload').addEventListener('click', () => {
   if (currentUploadXhr) currentUploadXhr.abort();
 });
 
+function genUploadId() {
+  return crypto.randomUUID ? crypto.randomUUID()
+    : Date.now().toString(36) + Math.random().toString(36).slice(2) + Math.random().toString(36).slice(2);
+}
+
+// Sends one chunk. Resolves on 2xx; rejects with `.status` set otherwise (or `.cancelled` on abort).
+function sendChunk(url, blob, onProgress) {
+  return new Promise((resolve, reject) => {
+    const xhr = new XMLHttpRequest();
+    currentUploadXhr = xhr;
+    xhr.upload.addEventListener('progress', e => { if (e.lengthComputable) onProgress(e.loaded); });
+    xhr.addEventListener('load', () => {
+      if (xhr.status >= 200 && xhr.status < 300) return resolve();
+      let msg = `HTTP ${xhr.status}`;
+      try { const j = JSON.parse(xhr.responseText); if (j && j.error) msg = j.error; } catch {}
+      const err = new Error(msg); err.status = xhr.status; reject(err);
+    });
+    xhr.addEventListener('error', () => reject(new Error('Network error')));
+    xhr.addEventListener('abort', () => { const e = new Error('cancelled'); e.cancelled = true; reject(e); });
+    xhr.open('POST', url);
+    xhr.setRequestHeader('x-cloud-token', token);
+    xhr.setRequestHeader('Content-Type', 'application/octet-stream');
+    xhr.send(blob);
+  });
+}
+
+async function abortUpload(uploadId) {
+  try { await fetch(`${apiBase()}/upload/abort`, { method: 'POST', headers: authHeaders(), body: JSON.stringify({ uploadId }) }); } catch {}
+}
+
+async function uploadOneFile(file, dest, onProgress) {
+  const uploadId = genUploadId();
+  const chunkStarts = [];
+  if (file.size === 0) chunkStarts.push(0); // still send one empty chunk so the server has something to finalize
+  else for (let start = 0; start < file.size; start += CHUNK_SIZE) chunkStarts.push(start);
+
+  try {
+    let sent = 0;
+    for (let i = 0; i < chunkStarts.length; i++) {
+      if (uploadCancelled) { const e = new Error('cancelled'); e.cancelled = true; throw e; }
+      const start = chunkStarts[i];
+      const end   = Math.min(start + CHUNK_SIZE, file.size);
+      const blob  = file.slice(start, end);
+
+      for (let attempt = 0; ; attempt++) {
+        try {
+          await sendChunk(
+            `${apiBase()}/upload/chunk?uploadId=${uploadId}&offset=${start}`,
+            blob,
+            loaded => onProgress(sent + loaded, file.size || 1)
+          );
+          sent += (end - start);
+          break;
+        } catch (err) {
+          if (err.cancelled || uploadCancelled) { const e = new Error('cancelled'); e.cancelled = true; throw e; }
+          if (err.status === 401) throw err; // don't waste retries on an expired session
+          if (attempt >= MAX_CHUNK_RETRIES) throw new Error(`"${file.name}" failed on part ${i + 1}/${chunkStarts.length}: ${err.message}`);
+          await new Promise(r => setTimeout(r, Math.min(1000 * (attempt + 1), 5000))); // backoff, then retry this chunk only
+        }
+      }
+    }
+
+    const res  = await fetch(`${apiBase()}/upload/complete`, {
+      method: 'POST', headers: authHeaders(),
+      body: JSON.stringify({ uploadId, path: dest, totalSize: file.size }),
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) { const e = new Error(data.error || 'Could not finalize upload'); e.status = res.status; throw e; }
+  } catch (err) {
+    if (err.cancelled) abortUpload(uploadId);
+    throw err;
+  }
+}
+
 async function uploadFiles(files) {
   const prog  = document.getElementById('uploadProgress');
   const bar   = document.getElementById('upBar');
   const pct   = document.getElementById('upPct');
   const fname = document.getElementById('upFile');
+  const errEl = document.getElementById('upError');
   uploadCancelled = false;
   prog.classList.add('visible');
 
@@ -820,30 +905,24 @@ async function uploadFiles(files) {
     fname.textContent = file.name;
     bar.style.width = '0%';
     pct.textContent = '0%';
-    await new Promise(resolve => {
-      const xhr  = new XMLHttpRequest();
-      currentUploadXhr = xhr;
-      const fd   = new FormData();
-      const dest = currentPath ? `${currentPath}/${file.name}` : file.name;
-      fd.append('file', file);
-      fd.append('path', dest);
-      xhr.upload.addEventListener('progress', e => {
-        if (e.lengthComputable) {
-          const p = Math.round((e.loaded / e.total) * 100);
-          bar.style.width = p + '%';
-          pct.textContent = p + '%';
-        }
+    errEl.style.display = 'none';
+    errEl.textContent = '';
+
+    const dest = currentPath ? `${currentPath}/${file.name}` : file.name;
+    try {
+      await uploadOneFile(file, dest, (loaded, total) => {
+        const p = Math.round((loaded / total) * 100);
+        bar.style.width = p + '%';
+        pct.textContent = p + '%';
       });
-      xhr.addEventListener('load', () => {
-        if (xhr.status === 401) { clearToken(); token = ''; prog.classList.remove('visible'); showLogin(); }
-        resolve();
-      });
-      xhr.addEventListener('error', () => { console.error('Upload failed:', file.name); resolve(); });
-      xhr.addEventListener('abort', () => resolve());
-      xhr.open('POST', `${apiBase()}/upload`);
-      xhr.setRequestHeader('x-cloud-token', token);
-      xhr.send(fd);
-    });
+    } catch (err) {
+      if (err.cancelled) break;
+      if (err.status === 401) { clearToken(); token = ''; prog.classList.remove('visible'); showLogin(); return; }
+      console.error('Upload failed:', file.name, err);
+      errEl.textContent = `⚠ ${err.message}`;
+      errEl.style.display = 'block';
+      await new Promise(r => setTimeout(r, 3000)); // give the user a moment to read the error
+    }
   }
   currentUploadXhr = null;
   uploadCancelled  = false;

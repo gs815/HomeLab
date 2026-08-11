@@ -66,6 +66,23 @@ function cloudAuth(req, res, next) {
 const tmpUploadDir = path.join(CLOUD_ROOT, '.tmp');
 if (!fs.existsSync(tmpUploadDir)) fs.mkdirSync(tmpUploadDir, { recursive: true });
 
+// Sweep away partial-upload leftovers (crashed uploads, chunk sessions the client
+// never finished/aborted) so they don't silently pile up on the HDD over time.
+function cleanupStaleTmpFiles() {
+  const ONE_DAY = 24 * 60 * 60 * 1000;
+  try {
+    const now = Date.now();
+    for (const f of fs.readdirSync(tmpUploadDir)) {
+      try {
+        const p = path.join(tmpUploadDir, f);
+        if (now - fs.statSync(p).mtimeMs > ONE_DAY) fs.unlinkSync(p);
+      } catch {}
+    }
+  } catch {}
+}
+cleanupStaleTmpFiles();
+setInterval(cleanupStaleTmpFiles, 6 * 60 * 60 * 1000);
+
 const storage = multer.diskStorage({
   destination: (req, file, cb) => cb(null, tmpUploadDir),
   filename:    (req, file, cb) => cb(null, `upload_${Date.now()}_${Math.random().toString(36).slice(2)}`),
@@ -399,6 +416,7 @@ app.get('/api/cloud/preview', cloudAuth, (req, res) => {
 });
 
 // Upload — auth checked BEFORE multer via middleware; multer writes to .tmp, then moved
+// NOTE: kept for compatibility, but the web UI now uses the chunked endpoints below.
 app.post('/api/cloud/upload', cloudAuth, upload.single('file'), (req, res) => {
   if (!req.file) return res.status(400).json({ error: 'No file received' });
   try {
@@ -411,6 +429,96 @@ app.post('/api/cloud/upload', cloudAuth, upload.single('file'), (req, res) => {
     res.status(400).json({ error: e.message });
   }
 });
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// CHUNKED UPLOAD — fixes large files (900MB+) failing over slow/flaky connections.
+//
+// WHY: the single-shot /upload above sends the whole file in ONE HTTP request.
+// On a Pi + home network / Tailscale, a 900MB+ file can take several minutes to
+// transfer — and if anything hiccups during that window (Wi-Fi blip, a router's
+// NAT idle-connection timeout, a phone locking its screen, a brief stall on the
+// Pi's USB bus shared between Ethernet and the HDD, a Tailscale path change...)
+// the whole request dies with no retry. The old front-end only ever handled a
+// 401 response, so every other failure was silent — it just looked like large
+// files "don't work". Small files finish in seconds and rarely hit that window;
+// big files almost always do eventually.
+//
+// FIX: split the file into small chunks (CHUNK_SIZE in the upload JS) sent as
+// separate, short-lived requests. Each request finishes in a few seconds, so a
+// transient hiccup costs a retry of ONE chunk instead of restarting the whole
+// transfer — and a failure that still can't recover is now shown to the user.
+// ═══════════════════════════════════════════════════════════════════════════════
+
+const UPLOAD_ID_RE = /^[a-zA-Z0-9_-]{8,100}$/;
+
+function registerChunkedUpload(basePath, root) {
+  // One chunk, appended to the in-progress temp file at `offset`.
+  // Truncating to `offset` before appending makes a retried chunk idempotent:
+  // no matter how many times the SAME chunk is retried, the result is identical,
+  // so the client can safely retry on any failure without risking corruption.
+  app.post(`${basePath}/upload/chunk`, cloudAuth, (req, res) => {
+    const uploadId = req.query.uploadId;
+    const offset   = parseInt(req.query.offset, 10);
+    if (!uploadId || !UPLOAD_ID_RE.test(uploadId) || Number.isNaN(offset) || offset < 0) {
+      return res.status(400).json({ error: 'Invalid chunk parameters' });
+    }
+    const tmpPath = path.join(tmpUploadDir, `chunk_${uploadId}`);
+    try {
+      if (offset === 0) {
+        fs.writeFileSync(tmpPath, Buffer.alloc(0)); // fresh start, or a retry of the very first chunk
+      } else if (!fs.existsSync(tmpPath)) {
+        return res.status(410).json({ error: 'Upload session expired (server may have restarted) — please retry this file' });
+      } else {
+        const currentSize = fs.statSync(tmpPath).size;
+        if (currentSize > offset) fs.truncateSync(tmpPath, offset);        // discard a previous, interrupted attempt at this chunk
+        else if (currentSize < offset) return res.status(409).json({ error: 'Upload out of sync — please retry this file' });
+      }
+    } catch (e) {
+      return res.status(500).json({ error: e.message });
+    }
+
+    const ws = fs.createWriteStream(tmpPath, { flags: 'a' });
+    let failed = false;
+    req.on('error', () => { failed = true; ws.destroy(); });
+    ws.on('error', (e) => { failed = true; if (!res.headersSent) res.status(500).json({ error: e.message }); });
+    ws.on('finish', () => { if (!failed && !res.headersSent) res.json({ ok: true }); });
+    req.pipe(ws);
+  });
+
+  // All chunks received — verify total size, then atomically move into place.
+  app.post(`${basePath}/upload/complete`, cloudAuth, (req, res) => {
+    try {
+      const { uploadId, totalSize } = req.body;
+      if (!uploadId || !UPLOAD_ID_RE.test(uploadId)) return res.status(400).json({ error: 'Invalid uploadId' });
+      const tmpPath = path.join(tmpUploadDir, `chunk_${uploadId}`);
+      if (!fs.existsSync(tmpPath)) return res.status(404).json({ error: 'Upload session not found' });
+      const stat = fs.statSync(tmpPath);
+      if (typeof totalSize === 'number' && stat.size !== totalSize) {
+        return res.status(400).json({ error: `Incomplete upload: expected ${totalSize} bytes, got ${stat.size}. Please retry.` });
+      }
+      const dest = safePath(root, req.body.path || '');
+      fs.mkdirSync(path.dirname(dest), { recursive: true });
+      fs.renameSync(tmpPath, dest);
+      res.json({ ok: true });
+    } catch (e) {
+      res.status(400).json({ error: e.message });
+    }
+  });
+
+  // User cancelled — best-effort cleanup of the partial temp file.
+  app.post(`${basePath}/upload/abort`, cloudAuth, (req, res) => {
+    try {
+      const { uploadId } = req.body;
+      if (uploadId && UPLOAD_ID_RE.test(uploadId)) {
+        const tmpPath = path.join(tmpUploadDir, `chunk_${uploadId}`);
+        if (fs.existsSync(tmpPath)) fs.unlinkSync(tmpPath);
+      }
+    } catch {}
+    res.json({ ok: true });
+  });
+}
+
+registerChunkedUpload('/api/cloud', CLOUD_ROOT);
 
 // New folder
 app.post('/api/cloud/mkdir', cloudAuth, (req, res) => {
@@ -530,6 +638,7 @@ app.get('/api/video/files/preview', cloudAuth, (req, res) => {
 });
 
 // Upload video file — multer writes to .tmp, then moves to VIDEO_ROOT
+// NOTE: kept for compatibility, but the web UI now uses the chunked endpoints below.
 app.post('/api/video/files/upload', cloudAuth, upload.single('file'), (req, res) => {
   if (!req.file) return res.status(400).json({ error: 'No file received' });
   try {
@@ -542,6 +651,10 @@ app.post('/api/video/files/upload', cloudAuth, upload.single('file'), (req, res)
     res.status(400).json({ error: e.message });
   }
 });
+
+// Same chunked-upload fix as HomeCloud, applied here too — video files (whole
+// movies/episodes) are often even bigger than 900MB, so this matters just as much.
+registerChunkedUpload('/api/video/files', VIDEO_ROOT);
 
 // New video folder
 app.post('/api/video/files/mkdir', cloudAuth, (req, res) => {
