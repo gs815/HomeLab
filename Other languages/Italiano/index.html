@@ -1,0 +1,545 @@
+<!DOCTYPE html>
+<html lang="it">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Homelab</title>
+  <style>
+    /* Font di sistema — nessuna richiesta a internet */
+
+    :root {
+      --bg:      #0a0a0f;
+      --surface: #111118;
+      --surf2:   #1a1a24;
+      --border:  #ffffff0f;
+      --text:    #f0f0f0;
+      --muted:   #888899;
+      --blue:    #4f8ef7;
+      --red:     #e50914;
+      --green:   #4fc3f7;
+    }
+
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Helvetica Neue', Arial, system-ui, sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      gap: 40px;
+      padding: 40px 20px;
+    }
+
+    /* ── HEADER ── */
+    .header {
+      display: flex;
+      align-items: center;
+      gap: 16px;
+    }
+    h1 {
+      font-family: Impact, 'Arial Narrow', Arial, sans-serif;
+      font-size: 2.8rem;
+      letter-spacing: 4px;
+      color: var(--text);
+    }
+    h1 span { color: var(--blue); }
+
+    .sys-btn {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      color: var(--muted);
+      cursor: pointer;
+      font-size: 1.2rem;
+      width: 42px; height: 42px;
+      display: flex; align-items: center; justify-content: center;
+      transition: border-color .2s, color .2s, background .2s;
+      flex-shrink: 0;
+    }
+    .sys-btn:hover { border-color: var(--blue); color: var(--text); background: var(--surf2); }
+    .sys-btn.active { border-color: var(--blue); color: var(--blue); background: #0d1a33; }
+
+    /* ── CARDS ── */
+    .grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+      gap: 20px;
+      width: 100%;
+      max-width: 680px;
+    }
+
+    .card {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 18px;
+      padding: 36px 20px 28px;
+      text-align: center;
+      text-decoration: none;
+      color: inherit;
+      transition: transform .22s, border-color .22s, box-shadow .22s;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 10px;
+    }
+    .card:hover { transform: translateY(-6px); }
+    .card.red:hover   { border-color: var(--red);   box-shadow: 0 10px 36px rgba(229,9,20,.18); }
+    .card.green:hover { border-color: var(--blue);  box-shadow: 0 10px 36px rgba(79,142,247,.18); }
+    .card.blue:hover  { border-color: var(--green); box-shadow: 0 10px 36px rgba(79,195,247,.18); }
+
+    .card .icon { font-size: 2.8rem; }
+    .card h2 {
+      font-family: Impact, 'Arial Narrow', Arial, sans-serif;
+      font-size: 1.3rem;
+      letter-spacing: 2px;
+      color: var(--text);
+    }
+    .card-sub { font-size: 0.75rem; color: var(--muted); min-height: 16px; }
+
+    /* ── PANNELLO SISTEMA ── */
+    .sys-panel {
+      width: 100%;
+      max-width: 680px;
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 18px;
+      overflow: hidden;
+      display: none;
+      animation: slideDown .25s ease;
+    }
+    .sys-panel.open { display: block; }
+
+    @keyframes slideDown {
+      from { opacity: 0; transform: translateY(-12px); }
+      to   { opacity: 1; transform: translateY(0); }
+    }
+
+    .sys-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 16px 22px;
+      border-bottom: 1px solid var(--border);
+    }
+    .sys-header-title {
+      font-family: Impact, 'Arial Narrow', Arial, sans-serif;
+      font-size: 1rem;
+      letter-spacing: 2px;
+      color: var(--muted);
+    }
+    .sys-refresh {
+      background: none; border: none; color: var(--muted);
+      cursor: pointer; font-size: 1rem; padding: 4px 8px;
+      border-radius: 6px; transition: color .15s, background .15s;
+    }
+    .sys-refresh:hover { color: var(--text); background: var(--surf2); }
+    .sys-refresh.spinning { animation: spin .7s linear infinite; }
+    @keyframes spin { to { transform: rotate(360deg); } }
+
+    /* ── CARICAMENTO / ERRORE ── */
+    .sys-loading {
+      display: flex; align-items: center; justify-content: center;
+      padding: 48px; color: var(--muted); font-size: 0.88rem; gap: 10px;
+    }
+    .sys-error { padding: 32px; text-align: center; color: #e55; font-size: 0.88rem; }
+
+    /* ── BODY DEL PANNELLO ── */
+    .sys-body { padding: 20px 22px 24px; display: flex; flex-direction: column; gap: 20px; }
+
+    /* ── SEZIONE ── */
+    .sys-section-title {
+      font-size: 0.7rem;
+      font-weight: 600;
+      letter-spacing: 1.5px;
+      color: var(--muted);
+      text-transform: uppercase;
+      margin-bottom: 10px;
+    }
+
+    /* ── STAT GRID ── */
+    .stat-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(120px, 1fr));
+      gap: 10px;
+    }
+    .stat-box {
+      background: var(--surf2);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 14px 14px 12px;
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+    }
+    .stat-label { font-size: 0.68rem; color: var(--muted); letter-spacing: .5px; }
+    .stat-value { font-size: 1.3rem; font-weight: 600; color: var(--text); line-height: 1.2; }
+    .stat-sub   { font-size: 0.7rem; color: var(--muted); }
+
+    /* Colori stato */
+    .val-ok   { color: #4caf50; }
+    .val-warn { color: #ffb300; }
+    .val-crit { color: #e55; }
+
+    /* ── BARRA PROGRESSO ── */
+    .bar-wrap {
+      background: var(--surf2);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 14px 16px;
+    }
+    .bar-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: baseline;
+      margin-bottom: 10px;
+    }
+    .bar-title { font-size: 0.82rem; font-weight: 500; }
+    .bar-pct   { font-size: 0.78rem; color: var(--muted); }
+    .bar-track {
+      background: var(--bg);
+      border-radius: 4px;
+      height: 6px;
+      overflow: hidden;
+      margin-bottom: 10px;
+    }
+    .bar-fill {
+      height: 100%;
+      border-radius: 4px;
+      background: var(--blue);
+      transition: width .6s cubic-bezier(.4,0,.2,1);
+    }
+    .bar-fill.warn { background: #ffb300; }
+    .bar-fill.crit { background: #e55; }
+
+    /* Legenda sezioni HDD */
+    .disk-legend {
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+      margin-top: 4px;
+    }
+    .legend-row {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      font-size: 0.75rem;
+      color: var(--muted);
+    }
+    .legend-dot {
+      width: 8px; height: 8px;
+      border-radius: 50%;
+      flex-shrink: 0;
+    }
+    .legend-name { flex: 1; }
+    .legend-size { font-variant-numeric: tabular-nums; }
+
+    /* Barra segmentata HDD */
+    .seg-track {
+      height: 8px;
+      border-radius: 4px;
+      overflow: hidden;
+      background: var(--bg);
+      display: flex;
+      margin-bottom: 12px;
+    }
+    .seg { height: 100%; transition: width .6s cubic-bezier(.4,0,.2,1); }
+
+    /* ── INFO RIGA ── */
+    .info-row {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 8px 0;
+      border-bottom: 1px solid var(--border);
+      font-size: 0.83rem;
+    }
+    .info-row:last-child { border-bottom: none; }
+    .info-key   { color: var(--muted); }
+    .info-val   { font-weight: 500; font-family: 'Courier New', monospace; font-size: 0.8rem; }
+
+    /* ── FOOTER ── */
+    footer { color: #333344; font-size: 0.78rem; }
+
+    @media (max-width: 480px) {
+      h1 { font-size: 2.2rem; }
+      .stat-grid { grid-template-columns: repeat(2, 1fr); }
+    }
+  </style>
+</head>
+<body>
+
+  <div class="header">
+    <h1>🏠 HOME<span>LAB</span></h1>
+    <button class="sys-btn" id="sysBtn" title="Stato del sistema">⚙️</button>
+  </div>
+
+  <!-- PANNELLO SISTEMA -->
+  <div class="sys-panel" id="sysPanel">
+    <div class="sys-header">
+      <div class="sys-header-title">⚙ STATO SISTEMA</div>
+      <button class="sys-refresh" id="sysRefresh" title="Aggiorna">↺</button>
+    </div>
+    <div id="sysPanelBody">
+      <div class="sys-loading">Caricamento...</div>
+    </div>
+  </div>
+
+  <!-- CARD -->
+  <div class="grid">
+    <a class="card red" href="video.html">
+      <div class="icon">🎬</div>
+      <h2>Video</h2>
+      <div class="card-sub" id="subVideo"></div>
+    </a>
+    <a class="card green" href="cloud.html">
+      <div class="icon">☁️</div>
+      <h2>Cloud</h2>
+      <div class="card-sub" id="subCloud"></div>
+    </a>
+    <a class="card blue" href="chat.html">
+      <div class="icon">🤖</div>
+      <h2>Chat AI</h2>
+      <div class="card-sub" id="subChat"></div>
+    </a>
+  </div>
+
+  <footer>Homelab · Raspberry Pi</footer>
+
+<script>
+// ── Utility ───────────────────────────────────────────────────────────────────
+function fmtBytes(b) {
+  if (b == null) return '–';
+  if (b === 0)   return '0 B';
+  const i = Math.floor(Math.log(b) / Math.log(1024));
+  return (b / Math.pow(1024, i)).toFixed(1) + ' ' + ['B','KB','MB','GB','TB'][i];
+}
+
+function fmtPct(used, total) {
+  if (!total) return 0;
+  return Math.round((used / total) * 100);
+}
+
+function tempClass(t) {
+  if (t == null) return '';
+  if (t >= 75)   return 'val-crit';
+  if (t >= 60)   return 'val-warn';
+  return 'val-ok';
+}
+
+function cpuClass(p) {
+  if (p >= 90) return 'val-crit';
+  if (p >= 70) return 'val-warn';
+  return 'val-ok';
+}
+
+function ramClass(p) {
+  if (p >= 90) return 'val-crit';
+  if (p >= 75) return 'val-warn';
+  return 'val-ok';
+}
+
+function barClass(p) {
+  if (p >= 90) return 'crit';
+  if (p >= 75) return 'warn';
+  return '';
+}
+
+function fmtUptime(u) {
+  if (u.days > 0) return `${u.days}g ${u.hours}h ${u.mins}m`;
+  if (u.hours > 0) return `${u.hours}h ${u.mins}m`;
+  return `${u.mins}m`;
+}
+
+// ── Rendering pannello ───────────────────────────────────────────────────────
+function renderPanel(d) {
+  const body = document.getElementById('sysPanelBody');
+
+  const diskPct  = d.disk ? fmtPct(d.disk.used, d.disk.total) : null;
+  const ramPct   = fmtPct(d.ram.used, d.ram.total);
+  const videoPct = d.disk ? fmtPct(d.sections.video, d.disk.total) : 0;
+  const cloudPct = d.disk ? fmtPct(d.sections.cloud, d.disk.total) : 0;
+  const otherUsed = d.disk ? Math.max(0, d.disk.used - d.sections.video - d.sections.cloud) : 0;
+  const otherPct  = d.disk ? fmtPct(otherUsed, d.disk.total) : 0;
+  const freePct   = d.disk ? fmtPct(d.disk.avail, d.disk.total) : 0;
+
+  const tempVal  = d.temp != null ? `${d.temp}°C` : '–';
+  const tempCls  = tempClass(d.temp);
+  const cpuCls   = cpuClass(d.cpu.pct);
+  const ramCls   = ramClass(ramPct);
+
+  body.innerHTML = `
+    <div class="sys-body">
+
+      <!-- STATISTICHE PRINCIPALI -->
+      <div>
+        <div class="sys-section-title">Prestazioni</div>
+        <div class="stat-grid">
+          <div class="stat-box">
+            <div class="stat-label">CPU</div>
+            <div class="stat-value ${cpuCls}">${d.cpu.pct}%</div>
+            <div class="stat-sub">Load ${d.cpu.loadAvg[0]}</div>
+          </div>
+          <div class="stat-box">
+            <div class="stat-label">RAM</div>
+            <div class="stat-value ${ramCls}">${ramPct}%</div>
+            <div class="stat-sub">${fmtBytes(d.ram.used)} / ${fmtBytes(d.ram.total)}</div>
+          </div>
+          <div class="stat-box">
+            <div class="stat-label">Temperatura</div>
+            <div class="stat-value ${tempCls}">${tempVal}</div>
+            <div class="stat-sub">SoC</div>
+          </div>
+          <div class="stat-box">
+            <div class="stat-label">Uptime</div>
+            <div class="stat-value" style="font-size:1.05rem">${fmtUptime(d.uptime)}</div>
+            <div class="stat-sub">${d.uptime.days > 0 ? d.uptime.days + ' giorni' : 'oggi'}</div>
+          </div>
+        </div>
+      </div>
+
+      <!-- BARRA RAM -->
+      <div class="bar-wrap">
+        <div class="bar-header">
+          <span class="bar-title">Memoria RAM</span>
+          <span class="bar-pct">${fmtBytes(d.ram.avail)} liberi</span>
+        </div>
+        <div class="bar-track">
+          <div class="bar-fill ${barClass(ramPct)}" style="width:${ramPct}%"></div>
+        </div>
+      </div>
+
+      <!-- SWAP / ZRAM -->
+      ${d.swap && d.swap.total > 0 ? (() => {
+        const swapPct = fmtPct(d.swap.used, d.swap.total);
+        return `
+      <div class="bar-wrap">
+        <div class="bar-header">
+          <span class="bar-title">Swap <span style="font-size:0.7rem;color:var(--muted);font-weight:400">(zram)</span></span>
+          <span class="bar-pct">${fmtBytes(d.swap.used)} / ${fmtBytes(d.swap.total)}</span>
+        </div>
+        <div class="bar-track">
+          <div class="bar-fill ${barClass(swapPct)}" style="width:${swapPct}%; background:#7b5ea7"></div>
+        </div>
+      </div>`;
+      })() : ''}
+
+      <!-- HDD -->
+      ${d.disk ? `
+      <div class="bar-wrap">
+        <div class="bar-header">
+          <span class="bar-title">Spazio HDD</span>
+          <span class="bar-pct">${fmtBytes(d.disk.avail)} liberi su ${fmtBytes(d.disk.total)}</span>
+        </div>
+        <!-- Barra segmentata -->
+        <div class="seg-track">
+          <div class="seg" style="width:${videoPct}%; background:#e50914"></div>
+          <div class="seg" style="width:${cloudPct}%; background:#4f8ef7"></div>
+          <div class="seg" style="width:${otherPct}%; background:#555566"></div>
+          <div class="seg" style="width:${freePct}%; background:#1a1a24"></div>
+        </div>
+        <!-- Legenda -->
+        <div class="disk-legend">
+          <div class="legend-row">
+            <div class="legend-dot" style="background:#e50914"></div>
+            <span class="legend-name">🎬 Video</span>
+            <span class="legend-size">${fmtBytes(d.sections.video)} (${videoPct}%)</span>
+          </div>
+          <div class="legend-row">
+            <div class="legend-dot" style="background:#4f8ef7"></div>
+            <span class="legend-name">☁️ Cloud</span>
+            <span class="legend-size">${fmtBytes(d.sections.cloud)} (${cloudPct}%)</span>
+          </div>
+          ${otherUsed > 0 ? `
+          <div class="legend-row">
+            <div class="legend-dot" style="background:#555566"></div>
+            <span class="legend-name">Altro</span>
+            <span class="legend-size">${fmtBytes(otherUsed)} (${otherPct}%)</span>
+          </div>` : ''}
+          <div class="legend-row">
+            <div class="legend-dot" style="background:#1a1a24; border:1px solid #333"></div>
+            <span class="legend-name">Libero</span>
+            <span class="legend-size">${fmtBytes(d.disk.avail)} (${freePct}%)</span>
+          </div>
+        </div>
+      </div>
+      ` : '<div class="sys-error">⚠ HDD non montato</div>'}
+
+      <!-- INFO SISTEMA -->
+      <div>
+        <div class="sys-section-title">Sistema</div>
+        <div>
+          ${d.cpu.model ? `
+          <div class="info-row">
+            <span class="info-key">Modello</span>
+            <span class="info-val">${d.cpu.model}</span>
+          </div>` : ''}
+          <div class="info-row">
+            <span class="info-key">Hostname</span>
+            <span class="info-val">${d.hostname || '–'}</span>
+          </div>
+          <div class="info-row">
+            <span class="info-key">Indirizzo IP</span>
+            <span class="info-val">${d.ip || '–'}</span>
+          </div>
+          <div class="info-row">
+            <span class="info-key">Load average</span>
+            <span class="info-val">${d.cpu.loadAvg.join('  ')}</span>
+          </div>
+        </div>
+      </div>
+
+    </div>`;
+
+  // Aggiorna i sottotitoli delle card con i dati HDD
+  if (d.disk) {
+    const el = document.getElementById('subVideo');
+    if (el) el.textContent = fmtBytes(d.sections.video);
+    const el2 = document.getElementById('subCloud');
+    if (el2) el2.textContent = fmtBytes(d.sections.cloud);
+  }
+}
+
+// ── Recupero dati ────────────────────────────────────────────────────────────
+let loading = false;
+
+async function loadSystem() {
+  if (loading) return;
+  loading = true;
+  const body    = document.getElementById('sysPanelBody');
+  const refresh = document.getElementById('sysRefresh');
+  body.innerHTML = '<div class="sys-loading">Caricamento...</div>';
+  refresh.classList.add('spinning');
+  try {
+    const res = await fetch('/api/system');
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const data = await res.json();
+    renderPanel(data);
+  } catch (e) {
+    body.innerHTML = `<div class="sys-error">⚠ Impossibile caricare i dati di sistema.<br><small>${e.message}</small></div>`;
+  } finally {
+    loading = false;
+    refresh.classList.remove('spinning');
+  }
+}
+
+// ── Apertura / chiusura pannello ─────────────────────────────────────────────
+const sysBtn   = document.getElementById('sysBtn');
+const sysPanel = document.getElementById('sysPanel');
+let panelOpen  = false;
+let loaded     = false;
+
+sysBtn.addEventListener('click', () => {
+  panelOpen = !panelOpen;
+  sysPanel.classList.toggle('open', panelOpen);
+  sysBtn.classList.toggle('active', panelOpen);
+  if (panelOpen && !loaded) { loaded = true; loadSystem(); }
+});
+
+document.getElementById('sysRefresh').addEventListener('click', loadSystem);
+</script>
+</body>
+</html>
