@@ -115,7 +115,12 @@
       position: relative;
     }
     .file-item:hover { background: var(--surface); border-color: var(--border); }
-    .file-icon { font-size: 1.3rem; flex-shrink: 0; width: 28px; text-align: center; }
+    .file-icon {
+      font-size: 1.3rem; flex-shrink: 0; width: 28px; height: 28px;
+      display: flex; align-items: center; justify-content: center;
+      text-align: center; border-radius: 6px; overflow: hidden;
+    }
+    .file-thumb { width: 100%; height: 100%; object-fit: cover; display: block; background: var(--surface2); }
     .file-main { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
     .file-name { font-size: 0.9rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
     .file-meta { font-size: 0.75rem; color: var(--muted); display: flex; gap: 10px; }
@@ -650,8 +655,26 @@ function renderFiles() {
     el.className = 'file-item';
     const icon = item.isDir ? '📁' : fileIcon(item.name);
     const canPreview = !item.isDir && isPreviewable(item.name);
+    const ext  = item.isDir ? '' : item.name.split('.').pop().toLowerCase();
+    // Real thumbnail for images/videos (reuses the existing /preview endpoint) instead of the emoji.
+    // For images we ask the server for the reduced-size version (&thumb=1, generated and cached
+    // server-side); for videos that concept doesn't apply here (it would need frame extraction,
+    // e.g. via ffmpeg — not implemented), so they stay on the original file.
+    const isImgThumb = !item.isDir && PREVIEW_IMAGES.has(ext);
+    const isVidThumb = !item.isDir && PREVIEW_VIDEOS.has(ext);
+    const previewPath = encodeURIComponent(currentPath ? `${currentPath}/${item.name}` : item.name);
+    const thumbUrl = isImgThumb
+      ? `${apiBase()}/preview?path=${previewPath}&token=${encodeURIComponent(token)}&thumb=1`
+      : isVidThumb
+        ? `${apiBase()}/preview?path=${previewPath}&token=${encodeURIComponent(token)}`
+        : '';
+    const iconInner = isImgThumb
+      ? `<img class="file-thumb" src="${thumbUrl}" alt="" loading="lazy">`
+      : isVidThumb
+        ? `<video class="file-thumb" src="${thumbUrl}" muted playsinline preload="metadata"></video>`
+        : icon;
     el.innerHTML = `
-      <div class="file-icon">${icon}</div>
+      <div class="file-icon${isImgThumb || isVidThumb ? ' has-thumb' : ''}">${iconInner}</div>
       <div class="file-main">
         <div class="file-name">${item.name}${canPreview ? '<span class="file-preview-hint">· preview</span>' : ''}</div>
         <div class="file-meta">
@@ -667,6 +690,23 @@ function renderFiles() {
         <div class="file-dd-sep"></div>
         <button class="file-dd-item danger" data-action="delete">🗑  Delete</button>
       </div>`;
+
+    if (isImgThumb || isVidThumb) {
+      const thumbEl = el.querySelector('.file-thumb');
+      // If the thumbnail fails to load (format the browser can't decode, corrupted
+      // file, etc.) fall back to the emoji instead of leaving an empty box.
+      thumbEl.addEventListener('error', () => {
+        const box = el.querySelector('.file-icon');
+        box.classList.remove('has-thumb');
+        box.textContent = icon;
+      }, { once: true });
+      if (isVidThumb) {
+        // Land on a frame a quarter of the way into the video (max 1s) as a static thumbnail.
+        thumbEl.addEventListener('loadedmetadata', () => {
+          try { thumbEl.currentTime = Math.min(1, (thumbEl.duration || 2) / 4); } catch {}
+        }, { once: true });
+      }
+    }
 
     el.addEventListener('click', e => {
       if (e.target.closest('.file-menu-btn') || e.target.closest('.file-dropdown')) return;

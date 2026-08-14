@@ -34,6 +34,7 @@ homelab/
 ├── server.js          ← Express server (API + static file serving)
 ├── package.json
 ├── .sessions.json     ← auto-generated, stores active session tokens
+├── .thumb-cache/      ← auto-generated, reduced-size image thumbnails (requires "sharp", see step 9)
 └── public/
     ├── index.html     ← Home page (links to the three sections)
     ├── video.html     ← Video streaming interface
@@ -293,6 +294,18 @@ http://192.168.1.100:3000
 
 If you see the Homelab home page, everything is working. Press `CTRL+C` to stop the server.
 
+#### Reduced-size photo thumbnails (optional, recommended)
+
+In the Cloud section, the file list shows a real thumbnail for images instead of a generic icon. For it to be a **real, reduced-size thumbnail** (a few KB, instead of downloading the whole photo just to see it small) you need the `sharp` library:
+
+```bash
+cd ~/homelab && npm install sharp
+```
+
+It's not required: if it isn't installed (or the install fails), the server keeps working normally and simply shows the original file instead of a reduced-size thumbnail — no error, no broken feature, just the optimization missing. On 64-bit Raspberry Pi OS (`uname -m` → `aarch64`) with a recent Node.js, it downloads a prebuilt binary in a few seconds, no compiling; on a 32-bit OS it may take a bit longer.
+
+After installing, restart the server for the change to take effect: `pm2 restart homelab` (or `node server.js` again if you haven't set up PM2 yet — see the next step).
+
 ---
 
 ### 10. Autostart with PM2
@@ -483,6 +496,12 @@ The server always reads from `/mnt/hdd/` — no other changes needed.
 - MP4 with H.264 codec has the widest compatibility — convert with HandBrake
 - MKV and AVI may not work in Safari or mobile browsers
 - Check the browser console for errors (F12)
+
+### Photo thumbnails stay at full resolution (or don't show up)
+- Check that `sharp` is installed: `cd ~/homelab && npm list sharp`
+- If it's missing: `npm install sharp`, then `pm2 restart homelab`
+- Check the logs for the exact reason: `pm2 logs homelab`
+- Not a blocking issue: without `sharp` the system still shows the original file, just heavier to load
 
 ### HDD doesn't mount after reboot
 - Check `/etc/fstab`: `sudo cat /etc/fstab`

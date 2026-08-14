@@ -2,6 +2,19 @@ const express = require('express');
 const fs      = require('fs');
 const path    = require('path');
 const multer  = require('multer');
+const crypto  = require('crypto');
+
+// Optional library for generating reduced-resolution thumbnails.
+// Defensive loading: if "sharp" isn't installed (or the install isn't
+// compatible with this system) the server must keep working normally —
+// "thumb=1" requests will simply be served as the original file, exactly
+// as before.
+let sharp = null;
+try {
+  sharp = require('sharp');
+} catch (e) {
+  console.warn('[thumbnails] "sharp" not available (', e.message, ') — reduced-size thumbnails are disabled, the original file will be served instead.');
+}
 
 const app  = express();
 const PORT = 3000;
@@ -15,7 +28,14 @@ const VIDEO_ROOT = '/mnt/hdd/video';
 const CLOUD_ROOT = '/mnt/hdd/cloud';
 const VIDEO_EXT  = /\.(mp4|mkv|avi|mov|webm)$/i;
 
+// ── Reduced-size image thumbnails (on-disk cache) ──────────────────────────────
+const THUMB_CACHE_DIR = path.join(__dirname, '.thumb-cache'); // outside CLOUD_ROOT/VIDEO_ROOT: never shows up in file listings
+const THUMB_SIZE       = 120;  // side in px (still sharp on retina screens in the list's 28px box)
+const THUMB_JPEG_QUALITY = 75; // JPEG quality, imperceptible at this size
+
 if (!fs.existsSync(CLOUD_ROOT)) fs.mkdirSync(CLOUD_ROOT, { recursive: true });
+if (!fs.existsSync(path.join(THUMB_CACHE_DIR, 'cloud'))) fs.mkdirSync(path.join(THUMB_CACHE_DIR, 'cloud'), { recursive: true });
+if (!fs.existsSync(path.join(THUMB_CACHE_DIR, 'video'))) fs.mkdirSync(path.join(THUMB_CACHE_DIR, 'video'), { recursive: true });
 
 app.use(express.json());
 app.use(express.static(path.join(__dirname, 'public')));
@@ -53,6 +73,48 @@ function safePath(root, rel) {
   const resolved = path.resolve(root, rel || '');
   if (resolved !== root && !resolved.startsWith(root + path.sep)) throw new Error('Invalid path');
   return resolved;
+}
+
+// ── Utility: correct parsing of HTTP Range headers ─────────────────────────────
+// Handles all three valid forms: "bytes=N-M", "bytes=N-" and "bytes=-N" (this
+// last one, "last N bytes", is what browsers use to look for metadata that sits
+// at the end of the file instead of the start — it wasn't handled before and
+// produced a NaN that made the request fail).
+function parseRangeHeader(rangeHeader, fileSize, defaultChunk = 1024 * 1024) {
+  const raw = rangeHeader.replace(/^bytes=/, '');
+  const [startStr, endStr] = raw.split('-');
+  let start, end;
+  if (startStr === '') {
+    // "bytes=-N" form: last N bytes of the file
+    const suffixLength = parseInt(endStr, 10);
+    if (Number.isNaN(suffixLength)) return null;
+    start = Math.max(fileSize - suffixLength, 0);
+    end   = fileSize - 1;
+  } else {
+    start = parseInt(startStr, 10);
+    if (Number.isNaN(start)) return null;
+    end = endStr ? parseInt(endStr, 10) : Math.min(start + defaultChunk, fileSize - 1);
+    if (Number.isNaN(end)) return null;
+  }
+  if (start < 0 || start >= fileSize || start > end) return null;
+  end = Math.min(end, fileSize - 1);
+  return { start, end };
+}
+
+// ── Utility: reduced-size image thumbnail, with on-disk cache ─────────────────
+// The cache filename depends on path + mtime + size, so if the original file is
+// replaced the cache invalidates itself (new hash = new file, the old one just
+// goes unused). Throws on failure: it's up to the caller to decide whether to
+// fall back to the original file.
+async function getOrCreateThumbnail(filePath, cacheScope, relPath, stat) {
+  const hash      = crypto.createHash('md5').update(`${relPath}:${stat.mtimeMs}:${stat.size}`).digest('hex');
+  const cachePath = path.join(THUMB_CACHE_DIR, cacheScope, `${hash}.jpg`);
+  if (fs.existsSync(cachePath)) return cachePath;
+  await sharp(filePath)
+    .resize(THUMB_SIZE, THUMB_SIZE, { fit: 'cover' })
+    .jpeg({ quality: THUMB_JPEG_QUALITY })
+    .toFile(cachePath);
+  return cachePath;
 }
 
 // ── Cloud authentication middleware ──────────────────────────────────────────
@@ -373,8 +435,8 @@ app.get('/api/cloud/download', cloudAuth, (req, res) => {
   } catch (e) { res.status(400).json({ error: e.message }); }
 });
 
-// Inline preview (no forced download, supports range for video)
-app.get('/api/cloud/preview', cloudAuth, (req, res) => {
+// Inline preview (no forced download, supports range for video, and reduced-size thumbnails with ?thumb=1)
+app.get('/api/cloud/preview', cloudAuth, async (req, res) => {
   try {
     const filePath = safePath(CLOUD_ROOT, req.query.path || '');
     if (!fs.existsSync(filePath)) return res.status(404).send('File not found');
@@ -396,9 +458,9 @@ app.get('/api/cloud/preview', cloudAuth, (req, res) => {
     // Range support for video
     const range = req.headers.range;
     if (range && mime.startsWith('video/')) {
-      const parts = range.replace('bytes=', '').split('-');
-      const start = parseInt(parts[0], 10);
-      const end   = parts[1] ? parseInt(parts[1], 10) : Math.min(start + 1024 * 1024, stat.size - 1);
+      const parsed = parseRangeHeader(range, stat.size);
+      if (!parsed) return res.status(416).set('Content-Range', `bytes */${stat.size}`).end();
+      const { start, end } = parsed;
       res.writeHead(206, {
         'Content-Range':  `bytes ${start}-${end}/${stat.size}`,
         'Accept-Ranges':  'bytes',
@@ -406,12 +468,25 @@ app.get('/api/cloud/preview', cloudAuth, (req, res) => {
         'Content-Type':   mime,
       });
       fs.createReadStream(filePath, { start, end }).pipe(res);
-    } else {
-      res.setHeader('Content-Type', mime);
-      res.setHeader('Content-Disposition', 'inline');
-      res.setHeader('Accept-Ranges', 'bytes');
-      res.sendFile(filePath);
+      return;
     }
+    // Reduced-size thumbnail for images (?thumb=1), with on-disk cache.
+    // If sharp isn't available, or generation fails for any reason, we simply
+    // fall through to serving the original file below — no visible error for
+    // the user, just no optimization for that one file.
+    if (req.query.thumb === '1' && mime.startsWith('image/') && sharp) {
+      try {
+        const thumbPath = await getOrCreateThumbnail(filePath, 'cloud', req.query.path || '', stat);
+        res.setHeader('Content-Type', 'image/jpeg');
+        return res.sendFile(thumbPath);
+      } catch (e) {
+        console.warn('[cloud/preview] thumbnail generation failed, serving original file:', e.message);
+      }
+    }
+    res.setHeader('Content-Type', mime);
+    res.setHeader('Content-Disposition', 'inline');
+    res.setHeader('Accept-Ranges', 'bytes');
+    res.sendFile(filePath);
   } catch (e) { res.status(400).json({ error: e.message }); }
 });
 
@@ -601,8 +676,8 @@ app.get('/api/video/files/download', cloudAuth, (req, res) => {
   } catch (e) { res.status(400).json({ error: e.message }); }
 });
 
-// Inline video file preview (with range support for video)
-app.get('/api/video/files/preview', cloudAuth, (req, res) => {
+// Inline video file preview (with range support for video, and reduced-size thumbnails with ?thumb=1)
+app.get('/api/video/files/preview', cloudAuth, async (req, res) => {
   try {
     const filePath = safePath(VIDEO_ROOT, req.query.path || '');
     if (!fs.existsSync(filePath)) return res.status(404).send('File not found');
@@ -618,9 +693,9 @@ app.get('/api/video/files/preview', cloudAuth, (req, res) => {
     const mime = mimes[ext] || 'application/octet-stream';
     const range = req.headers.range;
     if (range && mime.startsWith('video/')) {
-      const parts = range.replace('bytes=', '').split('-');
-      const start = parseInt(parts[0], 10);
-      const end   = parts[1] ? parseInt(parts[1], 10) : Math.min(start + 1024 * 1024, stat.size - 1);
+      const parsed = parseRangeHeader(range, stat.size);
+      if (!parsed) return res.status(416).set('Content-Range', `bytes */${stat.size}`).end();
+      const { start, end } = parsed;
       res.writeHead(206, {
         'Content-Range':  `bytes ${start}-${end}/${stat.size}`,
         'Accept-Ranges':  'bytes',
@@ -628,12 +703,21 @@ app.get('/api/video/files/preview', cloudAuth, (req, res) => {
         'Content-Type':   mime,
       });
       fs.createReadStream(filePath, { start, end }).pipe(res);
-    } else {
-      res.setHeader('Content-Type', mime);
-      res.setHeader('Content-Disposition', 'inline');
-      res.setHeader('Accept-Ranges', 'bytes');
-      res.sendFile(filePath);
+      return;
     }
+    if (req.query.thumb === '1' && mime.startsWith('image/') && sharp) {
+      try {
+        const thumbPath = await getOrCreateThumbnail(filePath, 'video', req.query.path || '', stat);
+        res.setHeader('Content-Type', 'image/jpeg');
+        return res.sendFile(thumbPath);
+      } catch (e) {
+        console.warn('[video/files/preview] thumbnail generation failed, serving original file:', e.message);
+      }
+    }
+    res.setHeader('Content-Type', mime);
+    res.setHeader('Content-Disposition', 'inline');
+    res.setHeader('Accept-Ranges', 'bytes');
+    res.sendFile(filePath);
   } catch (e) { res.status(400).json({ error: e.message }); }
 });
 
