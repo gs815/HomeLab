@@ -82,6 +82,7 @@
     .top-btn:hover { border-color: var(--accent); background: #1a1a2e; }
     .top-btn.primary { background: var(--accent); border-color: var(--accent); }
     .top-btn.primary:hover { background: var(--accent2); border-color: var(--accent2); }
+    .top-btn.active { background: var(--accent); border-color: var(--accent); }
 
     /* BREADCRUMB */
     .breadcrumb-bar {
@@ -98,6 +99,7 @@
 
     /* MAIN */
     .main { padding: 120px 28px 48px; }
+    body.selection-active .main { padding-bottom: 110px; }
 
     .toolbar { display: flex; align-items: center; gap: 12px; margin-bottom: 20px; }
     .sort-select {
@@ -115,6 +117,11 @@
       position: relative;
     }
     .file-item:hover { background: var(--surface); border-color: var(--border); }
+    .file-item.selected { background: #1a2a4a; border-color: var(--accent); }
+    .file-checkbox {
+      width: 20px; height: 20px; flex-shrink: 0; accent-color: var(--accent);
+      pointer-events: none; /* clicking is handled by the whole row, avoids double-toggling */
+    }
     .file-icon {
       font-size: 1.3rem; flex-shrink: 0; width: 28px; height: 28px;
       display: flex; align-items: center; justify-content: center;
@@ -210,6 +217,29 @@
     .up-pct { font-size: 0.75rem; color: var(--muted); margin-top: 6px; text-align: right; }
     .up-error { display: none; font-size: 0.78rem; color: var(--danger); margin-top: 10px; padding-top: 10px; border-top: 1px solid var(--border); line-height: 1.4; max-width: 320px; }
 
+    /* MULTI-SELECT ACTION BAR */
+    .selection-bar {
+      display: none; position: fixed; left: 0; right: 0; bottom: 0; z-index: 500;
+      background: var(--surface); border-top: 1px solid var(--border);
+      padding: 12px 20px; align-items: center; justify-content: space-between; gap: 12px;
+      box-shadow: 0 -8px 24px rgba(0,0,0,.4);
+    }
+    .selection-bar.visible { display: flex; }
+    .sel-count { font-size: 0.85rem; font-weight: 600; flex-shrink: 0; }
+    .sel-actions { display: flex; gap: 8px; flex-wrap: wrap; }
+    .sel-actions button {
+      background: none; border: 1px solid var(--border); color: var(--text);
+      padding: 8px 14px; border-radius: 8px; font-size: 0.8rem; font-family: inherit;
+      cursor: pointer; display: flex; align-items: center; gap: 6px; transition: border-color .15s, color .15s;
+    }
+    .sel-actions button:hover { border-color: var(--accent); }
+    .sel-actions button.danger:hover { border-color: var(--danger); color: var(--danger); }
+    .sel-cancel {
+      background: none; border: none; color: var(--muted); font-size: 1.1rem;
+      cursor: pointer; padding: 4px 8px; border-radius: 6px; line-height: 1; flex-shrink: 0;
+    }
+    .sel-cancel:hover { color: var(--text); background: var(--surface2); }
+
     ::-webkit-scrollbar { width: 6px; }
     ::-webkit-scrollbar-track { background: transparent; }
     ::-webkit-scrollbar-thumb { background: var(--surface2); border-radius: 3px; }
@@ -226,6 +256,12 @@
       .main { padding: 116px 14px 40px; }
       .breadcrumb-bar { padding: 8px 14px; }
       .file-date { display: none; }
+      .selection-bar { padding: 10px 12px; }
+      .sel-actions button span { display: none; }
+      .sel-actions button { padding: 8px 10px; }
+      /* Small screens have no room for one more toolbar button: entering
+         selection mode goes through each file's ⋯ menu instead. */
+      #btnSelectMode { display: none; }
       .mobile-search-bar {
         display: flex; position: fixed; top: 62px; left: 0; right: 0;
         z-index: 95; background: var(--surface); border-bottom: 1px solid var(--border);
@@ -332,6 +368,7 @@
     <div class="topbar-actions">
       <button class="top-btn" id="btnMobileSearch" style="display:none" aria-label="Search">🔍</button>
       <button class="top-btn" id="btnVideoMode" title="Video Library">📺</button>
+      <button class="top-btn" id="btnSelectMode" title="Select multiple items">☑ <span>Select</span></button>
       <button class="top-btn" id="btnNewFolder">📁 <span>New folder</span></button>
       <button class="top-btn primary" id="btnUpload">⬆ <span>Upload</span></button>
       <input type="file" id="fileInput" multiple style="display:none">
@@ -414,10 +451,21 @@
   </div>
 </div>
 
+<!-- MULTI-SELECT ACTION BAR -->
+<div class="selection-bar" id="selectionBar">
+  <span class="sel-count" id="selCount">0 selected</span>
+  <div class="sel-actions">
+    <button id="selZip">⬇ <span>ZIP</span></button>
+    <button id="selMove">📂 <span>Move</span></button>
+    <button class="danger" id="selDelete">🗑 <span>Delete</span></button>
+  </div>
+  <button class="sel-cancel" id="selCancel" title="Cancel selection">✕</button>
+</div>
+
 <!-- UPLOAD PROGRESS -->
 <div class="upload-progress" id="uploadProgress">
   <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px">
-    <div class="up-title" style="margin-bottom:0">⬆ Uploading...</div>
+    <div class="up-title" id="upTitle" style="margin-bottom:0">⬆ Uploading...</div>
     <button id="btnCancelUpload" title="Cancel upload" style="background:none;border:none;color:var(--muted);font-size:1rem;cursor:pointer;padding:2px 6px;border-radius:6px;line-height:1;transition:color .15s,background .15s" onmouseover="this.style.color='var(--danger)';this.style.background='#2a0a0a'" onmouseout="this.style.color='var(--muted)';this.style.background='none'">✕</button>
   </div>
   <div class="up-file" id="upFile"></div>
@@ -468,6 +516,8 @@ let searchQ      = '';
 let sortMode     = 'name';
 let deleteTarget = null;
 let cachedItems  = [];
+let selectionMode = false;
+let selectedItems = new Set(); // names of the items selected in the current folder
 
 // ── API base path based on current mode ──────────────────────────────────────
 function apiBase() {
@@ -554,6 +604,7 @@ function navigate(p) {
   currentPath = p;
   searchQ = '';
   document.getElementById('search').value = '';
+  exitSelectionMode();
   loadDir(p);
 }
 
@@ -674,6 +725,7 @@ function renderFiles() {
         ? `<video class="file-thumb" src="${thumbUrl}" muted playsinline preload="metadata"></video>`
         : icon;
     el.innerHTML = `
+      ${selectionMode ? `<input type="checkbox" class="file-checkbox" ${selectedItems.has(item.name) ? 'checked' : ''}>` : ''}
       <div class="file-icon${isImgThumb || isVidThumb ? ' has-thumb' : ''}">${iconInner}</div>
       <div class="file-main">
         <div class="file-name">${item.name}${canPreview ? '<span class="file-preview-hint">· preview</span>' : ''}</div>
@@ -682,14 +734,18 @@ function renderFiles() {
           <span class="file-date">${fmtDate(item.mtime)}</span>
         </div>
       </div>
-      <button class="file-menu-btn" data-action="menu" title="Actions">⋯</button>
+      ${selectionMode ? '' : `<button class="file-menu-btn" data-action="menu" title="Actions">⋯</button>
       <div class="file-dropdown">
-        ${!item.isDir ? `<button class="file-dd-item" data-action="download">⬇  Download</button>` : ''}
+        ${isMobile() ? `<button class="file-dd-item" data-action="select">☑  Select</button><div class="file-dd-sep"></div>` : ''}
+        ${!item.isDir
+          ? `<button class="file-dd-item" data-action="download">⬇  Download</button>`
+          : `<button class="file-dd-item" data-action="download-zip">⬇  Download as ZIP</button>`}
         <button class="file-dd-item" data-action="rename">✏  Rename</button>
         <button class="file-dd-item" data-action="move">📂  Move</button>
         <div class="file-dd-sep"></div>
         <button class="file-dd-item danger" data-action="delete">🗑  Delete</button>
-      </div>`;
+      </div>`}`;
+    if (selectionMode && selectedItems.has(item.name)) el.classList.add('selected');
 
     if (isImgThumb || isVidThumb) {
       const thumbEl = el.querySelector('.file-thumb');
@@ -709,6 +765,11 @@ function renderFiles() {
     }
 
     el.addEventListener('click', e => {
+      if (selectionMode) {
+        e.stopPropagation();
+        toggleSelect(item.name, el);
+        return;
+      }
       if (e.target.closest('.file-menu-btn') || e.target.closest('.file-dropdown')) return;
       closeAllDropdowns();
       if (item.isDir) navigate(currentPath ? `${currentPath}/${item.name}` : item.name);
@@ -716,29 +777,115 @@ function renderFiles() {
       else downloadFile(item.name);
     });
 
-    el.querySelector('.file-menu-btn').addEventListener('click', e => {
-      e.stopPropagation();
-      const dd = el.querySelector('.file-dropdown');
-      const isOpen = dd.classList.contains('open');
-      closeAllDropdowns();
-      if (!isOpen) dd.classList.add('open');
-    });
+    if (!selectionMode) {
+      el.querySelector('.file-menu-btn').addEventListener('click', e => {
+        e.stopPropagation();
+        const dd = el.querySelector('.file-dropdown');
+        const isOpen = dd.classList.contains('open');
+        closeAllDropdowns();
+        if (!isOpen) dd.classList.add('open');
+      });
 
-    el.querySelector('[data-action="delete"]')?.addEventListener('click', e => {
-      e.stopPropagation(); closeAllDropdowns(); openDeleteModal(item.name, item.isDir);
-    });
-    el.querySelector('[data-action="download"]')?.addEventListener('click', e => {
-      e.stopPropagation(); closeAllDropdowns(); downloadFile(item.name);
-    });
-    el.querySelector('[data-action="rename"]')?.addEventListener('click', e => {
-      e.stopPropagation(); closeAllDropdowns(); openRenameModal(item.name);
-    });
-    el.querySelector('[data-action="move"]')?.addEventListener('click', e => {
-      e.stopPropagation(); closeAllDropdowns(); openMoveModal(item.name, item.isDir);
-    });
+      el.querySelector('[data-action="select"]')?.addEventListener('click', e => {
+        e.stopPropagation(); closeAllDropdowns(); enterSelectionWithItem(item.name);
+      });
+      el.querySelector('[data-action="delete"]')?.addEventListener('click', e => {
+        e.stopPropagation(); closeAllDropdowns(); openDeleteModal(item.name, item.isDir);
+      });
+      el.querySelector('[data-action="download"]')?.addEventListener('click', e => {
+        e.stopPropagation(); closeAllDropdowns(); downloadFile(item.name);
+      });
+      el.querySelector('[data-action="download-zip"]')?.addEventListener('click', e => {
+        e.stopPropagation(); closeAllDropdowns(); downloadFolderZip(item.name);
+      });
+      el.querySelector('[data-action="rename"]')?.addEventListener('click', e => {
+        e.stopPropagation(); closeAllDropdowns(); openRenameModal(item.name);
+      });
+      el.querySelector('[data-action="move"]')?.addEventListener('click', e => {
+        e.stopPropagation(); closeAllDropdowns(); openMoveModal(item.name, item.isDir);
+      });
+    }
     list.appendChild(el);
   });
 }
+
+// ── Multi-select ────────────────────────────────────────────────────────────
+function toggleSelect(name, el) {
+  if (selectedItems.has(name)) selectedItems.delete(name);
+  else selectedItems.add(name);
+  // If removing the last item leaves the selection empty, exit selection mode
+  // on its own instead of staying "stuck" with nothing selected.
+  if (selectionMode && selectedItems.size === 0) {
+    exitSelectionMode();
+    renderFiles();
+    return;
+  }
+  el.classList.toggle('selected', selectedItems.has(name));
+  const cb = el.querySelector('.file-checkbox');
+  if (cb) cb.checked = selectedItems.has(name);
+  updateSelectionBar();
+}
+
+// Enters selection mode already starting with one item checked — used by the
+// "Select" entry in each file's ⋯ menu (on mobile, where the top toolbar
+// button is hidden for lack of space).
+function enterSelectionWithItem(name) {
+  selectionMode = true;
+  selectedItems.add(name);
+  document.body.classList.add('selection-active');
+  document.getElementById('btnSelectMode').classList.add('active');
+  renderFiles();
+  updateSelectionBar();
+}
+
+function updateSelectionBar() {
+  const bar = document.getElementById('selectionBar');
+  const n   = selectedItems.size;
+  document.getElementById('selCount').textContent = `${n} selected`;
+  bar.classList.toggle('visible', n > 0);
+}
+
+function exitSelectionMode() {
+  selectionMode = false;
+  selectedItems.clear();
+  document.body.classList.remove('selection-active');
+  document.getElementById('btnSelectMode').classList.remove('active');
+  document.getElementById('selectionBar').classList.remove('visible');
+}
+
+// Retrieves the {name, isDir} objects for the currently selected names, reading
+// isDir from the current folder's cache.
+function getSelectedItemsData() {
+  return [...selectedItems]
+    .map(name => cachedItems.find(i => i.name === name))
+    .filter(Boolean);
+}
+
+document.getElementById('btnSelectMode').addEventListener('click', () => {
+  selectionMode = !selectionMode;
+  if (selectionMode) {
+    document.body.classList.add('selection-active');
+    document.getElementById('btnSelectMode').classList.add('active');
+  } else {
+    exitSelectionMode();
+  }
+  renderFiles();
+});
+
+document.getElementById('selCancel').addEventListener('click', () => {
+  exitSelectionMode();
+  renderFiles();
+});
+
+document.getElementById('selZip').addEventListener('click', downloadSelectedZip);
+document.getElementById('selMove').addEventListener('click', () => {
+  const items = getSelectedItemsData();
+  if (items.length) openMoveModal(items);
+});
+document.getElementById('selDelete').addEventListener('click', () => {
+  const items = getSelectedItemsData();
+  if (items.length) openDeleteModal(items);
+});
 
 // ── Close all dropdowns ───────────────────────────────────────────────────────
 function closeAllDropdowns() {
@@ -755,6 +902,49 @@ function downloadFile(name) {
   document.body.appendChild(a);
   a.click();
   document.body.removeChild(a);
+}
+
+// Download a folder as a ZIP archive generated on the fly by the server.
+function downloadFolderZip(name) {
+  const p  = currentPath ? `${currentPath}/${name}` : name;
+  const a  = document.createElement('a');
+  a.href   = `${apiBase()}/download-zip?path=${encodeURIComponent(p)}&token=${encodeURIComponent(token)}`;
+  a.download = `${name}.zip`;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+}
+
+// Downloads the multi-select (files and/or folders together) as a single ZIP.
+// Two steps: first the job is "prepared" server-side (POST with the list of
+// paths, which avoids having to pass a huge query string), then it's
+// downloaded with a plain GET navigation — so the browser receives the file
+// as a stream without having to load it all into memory first (important for
+// any heavy video files that end up in the selection).
+async function downloadSelectedZip() {
+  const items = getSelectedItemsData();
+  if (!items.length) return;
+  const paths = items.map(i => currentPath ? `${currentPath}/${i.name}` : i.name);
+  try {
+    const res = await fetch(`${apiBase()}/download-zip-multi/prepare`, {
+      method: 'POST', headers: authHeaders(), body: JSON.stringify({ paths })
+    });
+    const data = await res.json();
+    if (!res.ok) {
+      alert('Error preparing the ZIP: ' + (data.error || 'unknown'));
+      return;
+    }
+    const a = document.createElement('a');
+    a.href = `${apiBase()}/download-zip-multi?job=${encodeURIComponent(data.job)}&token=${encodeURIComponent(token)}`;
+    a.download = 'selection.zip';
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    exitSelectionMode();
+    renderFiles();
+  } catch (e) {
+    alert('Error preparing the ZIP: ' + e.message);
+  }
 }
 
 // ── Preview ───────────────────────────────────────────────────────────────────
@@ -933,6 +1123,7 @@ async function uploadOneFile(file, dest, onProgress) {
 
 async function uploadFiles(files) {
   const prog  = document.getElementById('uploadProgress');
+  const title = document.getElementById('upTitle');
   const bar   = document.getElementById('upBar');
   const pct   = document.getElementById('upPct');
   const fname = document.getElementById('upFile');
@@ -940,8 +1131,15 @@ async function uploadFiles(files) {
   uploadCancelled = false;
   prog.classList.add('visible');
 
-  for (const file of files) {
+  for (let i = 0; i < files.length; i++) {
+    const file = files[i];
     if (uploadCancelled) break;
+    // Shows the count and how many are still queued only when there's more
+    // than one file — with a single file, this would just be visual noise.
+    const remaining = files.length - (i + 1);
+    title.textContent = files.length > 1
+      ? `⬆ Uploading... (${i + 1} of ${files.length}, ${remaining} queued)`
+      : '⬆ Uploading...';
     fname.textContent = file.name;
     bar.style.width = '0%';
     pct.textContent = '0%';
@@ -990,9 +1188,13 @@ async function createFolder() {
 }
 
 // ── Delete ────────────────────────────────────────────────────────────────────
-function openDeleteModal(name, isDir) {
-  deleteTarget = { name, isDir };
-  document.getElementById('deleteTargetName').textContent = name;
+function openDeleteModal(nameOrItems, isDir) {
+  // Supports both the single call (name, isDir) used by each row's ⋯ menu,
+  // and the multi one (array of {name, isDir}) used by the selection bar.
+  deleteTarget = Array.isArray(nameOrItems) ? nameOrItems : [{ name: nameOrItems, isDir }];
+  document.getElementById('deleteTargetName').textContent = deleteTarget.length === 1
+    ? deleteTarget[0].name
+    : `${deleteTarget.length} selected items`;
   document.getElementById('deleteModal').classList.add('open');
 }
 document.getElementById('deleteCancel').addEventListener('click', () => {
@@ -1001,10 +1203,19 @@ document.getElementById('deleteCancel').addEventListener('click', () => {
 });
 document.getElementById('deleteConfirm').addEventListener('click', async () => {
   if (!deleteTarget) return;
-  const p = currentPath ? `${currentPath}/${deleteTarget.name}` : deleteTarget.name;
-  await fetch(`${apiBase()}/delete`, { method: 'POST', headers: authHeaders(), body: JSON.stringify({ path: p }) });
+  // Sequential deletion (not parallel) so as not to overload the Pi if some
+  // of the items are large folders that need to be removed recursively.
+  for (const t of deleteTarget) {
+    const p = currentPath ? `${currentPath}/${t.name}` : t.name;
+    try {
+      await fetch(`${apiBase()}/delete`, { method: 'POST', headers: authHeaders(), body: JSON.stringify({ path: p }) });
+    } catch (e) {
+      console.error('Delete failed:', t.name, e);
+    }
+  }
   document.getElementById('deleteModal').classList.remove('open');
   deleteTarget = null;
+  exitSelectionMode();
   loadDir(currentPath);
 });
 
@@ -1088,9 +1299,12 @@ async function doRename() {
 // ── Move ──────────────────────────────────────────────────────────────────────
 let moveTarget = null;
 
-function openMoveModal(name, isDir) {
-  moveTarget = { name, isDir };
-  document.getElementById('moveDesc').textContent = `Moving: ${name}`;
+function openMoveModal(nameOrItems, isDir) {
+  // Supports both the single call (name, isDir) and the multi one (array of {name, isDir}).
+  moveTarget = Array.isArray(nameOrItems) ? nameOrItems : [{ name: nameOrItems, isDir }];
+  document.getElementById('moveDesc').textContent = moveTarget.length === 1
+    ? `Moving: ${moveTarget[0].name}`
+    : `Moving ${moveTarget.length} items`;
   document.getElementById('moveInput').value = '';
   document.getElementById('moveModal').classList.add('open');
   loadFolderList();
@@ -1122,8 +1336,11 @@ async function loadFolderList() {
       const curItems = await curRes.json();
       curItems.filter(i => i.isDir).forEach(i => paths.add(`${currentPath}/${i.name}`));
     }
+    // Excludes folders that are themselves part of the selection (a folder
+    // can't be moved inside itself).
+    const excluded = new Set((moveTarget || []).map(t => currentPath ? `${currentPath}/${t.name}` : t.name));
     for (const p of paths) {
-      if (!moveTarget || p === (currentPath ? `${currentPath}/${moveTarget.name}` : moveTarget.name)) continue;
+      if (excluded.has(p)) continue;
       const el = document.createElement('div');
       el.className = 'folder-pick-item';
       el.textContent = `📁 ${p}`;
@@ -1145,31 +1362,60 @@ document.getElementById('moveConfirm').addEventListener('click', doMove);
 document.getElementById('moveInput').addEventListener('keydown', e => { if (e.key === 'Enter') doMove(); });
 
 async function doMove() {
-  if (!moveTarget) return;
+  if (!moveTarget || !moveTarget.length) return;
   const destDir = document.getElementById('moveInput').value.trim();
-  const oldPath = currentPath ? `${currentPath}/${moveTarget.name}` : moveTarget.name;
-  const newPath = destDir ? `${destDir}/${moveTarget.name}` : moveTarget.name;
 
-  if (oldPath === newPath) {
+  if (moveTarget.length === 1) {
+    // Moving a single item: unchanged behavior, with specific error messages.
+    const t = moveTarget[0];
+    const oldPath = currentPath ? `${currentPath}/${t.name}` : t.name;
+    const newPath = destDir ? `${destDir}/${t.name}` : t.name;
+    if (oldPath === newPath) {
+      document.getElementById('moveModal').classList.remove('open');
+      return;
+    }
+    const res = await fetch(`${apiBase()}/rename`, { method: 'POST', headers: authHeaders(), body: JSON.stringify({ oldPath, newPath }) });
+    if (!res.ok) {
+      const data = await res.json().catch(() => ({}));
+      if (data.error === 'Destination folder does not exist') {
+        alert(`Folder "${destDir}" does not exist. Create it first before moving.`);
+      } else if (data.error && data.error.includes('already exists')) {
+        alert(`An item with this name already exists in "${destDir || 'root'}".`);
+      } else {
+        alert('Move error: ' + (data.error || 'unknown'));
+      }
+      return;
+    }
     document.getElementById('moveModal').classList.remove('open');
+    moveTarget = null;
+    exitSelectionMode();
+    loadDir(currentPath);
     return;
   }
 
-  const res = await fetch(`${apiBase()}/rename`, { method: 'POST', headers: authHeaders(), body: JSON.stringify({ oldPath, newPath }) });
-  if (!res.ok) {
-    const data = await res.json().catch(() => ({}));
-    if (data.error === 'Destination folder does not exist') {
-      alert(`Folder "${destDir}" does not exist. Create it first before moving.`);
-    } else if (data.error && data.error.includes('already exists')) {
-      alert(`An item with this name already exists in "${destDir || 'root'}".`);
-    } else {
-      alert('Move error: ' + (data.error || 'unknown'));
+  // Moving multiple items: runs sequentially (not in parallel, so as not to
+  // overload the Pi) and reports any errors at the end, without stopping at
+  // the first one that fails.
+  const errors = [];
+  for (const t of moveTarget) {
+    const oldPath = currentPath ? `${currentPath}/${t.name}` : t.name;
+    const newPath = destDir ? `${destDir}/${t.name}` : t.name;
+    if (oldPath === newPath) continue;
+    try {
+      const res = await fetch(`${apiBase()}/rename`, { method: 'POST', headers: authHeaders(), body: JSON.stringify({ oldPath, newPath }) });
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        errors.push(`${t.name}: ${data.error || 'unknown error'}`);
+      }
+    } catch (e) {
+      errors.push(`${t.name}: ${e.message}`);
     }
-    return;
   }
   document.getElementById('moveModal').classList.remove('open');
   moveTarget = null;
+  exitSelectionMode();
   loadDir(currentPath);
+  if (errors.length) alert('Some items were not moved:\n' + errors.join('\n'));
 }
 
 // ── Close modal on outside click ──────────────────────────────────────────────

@@ -3,7 +3,7 @@
 A self-hosted, lightweight home server built with **Node.js + Express**, designed to run on a Raspberry Pi or any Linux machine. Provides three services through a single clean web interface:
 
 - **🎬 HomeVideo** — local video streaming (films, TV series, miscellaneous videos) with a Netflix-style library, custom poster support, and MKV subtitle extraction
-- **☁️ HomeCloud** — personal cloud storage with upload/download, folder management, inline file preview, and drag-and-drop
+- **☁️ HomeCloud** — personal cloud storage with upload/download (including downloading entire folders, or a multi-select of several files and folders, as ZIP), folder management, bulk select/move/delete, inline file preview, and drag-and-drop
 - **🤖 HomeAI** — local AI chat powered by [Ollama](https://ollama.com), with a dynamic model selector
 
 All services are accessible from any device on your local network (and remotely via Tailscale). No cloud subscriptions, no telemetry, no ads.
@@ -294,6 +294,30 @@ http://192.168.1.100:3000
 
 If you see the Homelab home page, everything is working. Press `CTRL+C` to stop the server.
 
+#### Downloading folders as ZIP (HomeCloud and HomeVideo)
+
+In both HomeCloud and HomeVideo, the ⋯ menu on every folder offers "Download as ZIP": the server compresses the folder on the fly, streaming it straight to the browser without ever writing a temporary `.zip` file to disk. This feature requires the `archiver` library:
+
+```bash
+cd ~/homelab && npm install archiver@7.0.1
+```
+
+⚠️ **Important:** install exactly version `7.0.1` (already pinned in `package.json`, so a plain `npm install` with no arguments respects it). `archiver` version `8.x` changed the library's interface in a way that's incompatible with the server code, and causes an `archiver is not a function` error in the logs. If you installed `archiver` without specifying a version and are hitting this error:
+
+```bash
+npm uninstall archiver
+npm install archiver@7.0.1
+pm2 restart homelab
+```
+
+It isn't required: if it's missing, the "Download as ZIP" button returns a handled error (no server crash, no corrupted data) and everything else — including single-file downloads — keeps working normally.
+
+#### Multi-select: bulk ZIP download, move and delete (HomeCloud and HomeVideo)
+
+A "☑ Select" button in the toolbar turns on multi-select, Google-Drive style: a checkbox appears on every file and folder, and a bar at the bottom shows the current count with three actions — **⬇ ZIP** (downloads everything selected, files and folders together, as a single archive), **📂 Move**, and **🗑 Delete**. Deselecting the last item exits selection mode automatically. On narrow phone screens the toolbar button is hidden for lack of space; the same feature is reached instead through "☑ Select" in each file's ⋯ menu, which enters selection mode with that item already checked.
+
+This reuses the same `archiver` library as the single-folder ZIP download above — no separate dependency to install. The bulk ZIP download uses a short-lived, single-use server-side job (prepared via one request, then downloaded via a plain navigation) so large files stream straight through without ever being buffered in the browser's memory.
+
 #### Reduced-size photo thumbnails (optional, recommended)
 
 In the Cloud section, the file list shows a real thumbnail for images instead of a generic icon. For it to be a **real, reduced-size thumbnail** (a few KB, instead of downloading the whole photo just to see it small) you need the `sharp` library:
@@ -502,6 +526,13 @@ The server always reads from `/mnt/hdd/` — no other changes needed.
 - If it's missing: `npm install sharp`, then `pm2 restart homelab`
 - Check the logs for the exact reason: `pm2 logs homelab`
 - Not a blocking issue: without `sharp` the system still shows the original file, just heavier to load
+
+### "Download as ZIP" doesn't work / logs show "archiver is not a function"
+- Check the installed version: `cd ~/homelab && npm list archiver`
+- If it shows `8.x.x` instead of `7.x.x`, the version is incompatible with the server code: `npm uninstall archiver && npm install archiver@7.0.1`
+- Restart after any change: `pm2 restart homelab`
+- Check the logs for the exact error: `pm2 logs homelab`
+- Not a blocking issue for the rest of the system: without `archiver` (or with the wrong version) only the folder ZIP download is affected — single-file downloads keep working normally
 
 ### HDD doesn't mount after reboot
 - Check `/etc/fstab`: `sudo cat /etc/fstab`
