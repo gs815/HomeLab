@@ -3,7 +3,7 @@
 Un home server leggero e self-hosted costruito con **Node.js + Express**, progettato per girare su un Raspberry Pi o qualsiasi macchina Linux. Fornisce tre servizi attraverso un'unica interfaccia web:
 
 - **🎬 HomeVideo** — streaming video locale (film, serie TV, video vari) con una libreria in stile Netflix, supporto per poster personalizzati ed estrazione dei sottotitoli da file MKV
-- **☁️ HomeCloud** — archiviazione cloud personale con upload/download, gestione delle cartelle, anteprima inline dei file e drag-and-drop
+- **☁️ HomeCloud** — archiviazione cloud personale con upload/download (incluso il download di intere cartelle, o di una selezione multipla di più file e cartelle, come ZIP), gestione delle cartelle, selezione/spostamento/eliminazione in blocco, anteprima inline dei file e drag-and-drop
 - **🤖 HomeAI** — chat AI locale basata su [Ollama](https://ollama.com), con un selettore dinamico dei modelli
 
 Tutti i servizi sono accessibili da qualsiasi dispositivo sulla rete locale (e da remoto tramite Tailscale). Nessun abbonamento cloud, nessuna telemetria, nessuna pubblicità.
@@ -294,6 +294,30 @@ http://192.168.1.100:3000
 
 Se vedi la pagina principale di Homelab, tutto funziona. Premi `CTRL+C` per fermare il server.
 
+#### Download di cartelle come ZIP (HomeCloud e HomeVideo)
+
+Sia in HomeCloud che in HomeVideo, il menu ⋯ di ogni cartella offre "Scarica come ZIP": il server comprime la cartella al volo, in streaming, e la invia al browser senza mai scrivere un file `.zip` temporaneo sul disco. La funzione richiede la libreria `archiver`:
+
+```bash
+cd ~/homelab && npm install archiver@7.0.1
+```
+
+⚠️ **Importante:** installa esattamente la versione `7.0.1` (già indicata nel `package.json`, quindi un semplice `npm install` senza argomenti la rispetta). Le versioni `8.x` di `archiver` hanno cambiato l'interfaccia della libreria in modo incompatibile con il codice del server, e causano l'errore `archiver is not a function` nei log. Se hai installato `archiver` senza specificare la versione e riscontri questo errore:
+
+```bash
+npm uninstall archiver
+npm install archiver@7.0.1
+pm2 restart homelab
+```
+
+Non è obbligatoria: se manca, il pulsante "Scarica come ZIP" risponde con un errore gestito (né crash del server, né dati corrotti) e tutto il resto — inclusi i download di singoli file — continua a funzionare normalmente.
+
+#### Selezione multipla: ZIP, spostamento ed eliminazione in blocco (HomeCloud e HomeVideo)
+
+Un pulsante "☑ Seleziona" nella toolbar attiva la selezione multipla, in stile Google Drive: compare una checkbox su ogni file e cartella, e una barra in basso mostra il conteggio con tre azioni — **⬇ ZIP** (scarica tutto quello che hai selezionato, file e cartelle insieme, come un unico archivio), **📂 Sposta** e **🗑 Elimina**. Deselezionando l'ultimo elemento si esce automaticamente dalla modalità selezione. Su schermi di telefono stretti il pulsante nella toolbar è nascosto per mancanza di spazio; la stessa funzione si raggiunge invece dalla voce "☑ Seleziona" nel menu ⋯ di ogni file, che entra in modalità selezione con quell'elemento già spuntato.
+
+Questa funzione riusa la stessa libreria `archiver` del download ZIP a cartella singola descritto sopra — nessuna dipendenza separata da installare. Il download ZIP multiplo usa un job lato server temporaneo e a uso singolo (preparato con una richiesta, poi scaricato con una normale navigazione), così anche i file pesanti passano in streaming senza mai essere bufferizzati nella memoria del browser.
+
 #### Miniature ridotte per le foto (opzionale, consigliato)
 
 Nella sezione Cloud, l'elenco file mostra una miniatura reale delle immagini al posto di un'icona generica. Perché sia una **vera miniatura ridotta** (qualche KB, invece di scaricare la foto intera solo per vederla in piccolo) serve la libreria `sharp`:
@@ -502,6 +526,13 @@ Il server legge sempre da `/mnt/hdd/` — nessun'altra modifica è necessaria.
 - Se manca: `npm install sharp`, poi `pm2 restart homelab`
 - Controlla i log per il motivo esatto: `pm2 logs homelab`
 - Non è un problema bloccante: senza `sharp` il sistema mostra comunque il file originale, solo più pesante da caricare
+
+### "Scarica come ZIP" non funziona / i log mostrano "archiver is not a function"
+- Controlla la versione installata: `cd ~/homelab && npm list archiver`
+- Se mostra `8.x.x` invece di `7.x.x`, la versione non è compatibile col codice del server: `npm uninstall archiver && npm install archiver@7.0.1`
+- Riavvia dopo ogni modifica: `pm2 restart homelab`
+- Controlla i log per l'errore esatto: `pm2 logs homelab`
+- Non è un problema bloccante per il resto del sistema: senza `archiver` (o con la versione sbagliata) solo il download ZIP delle cartelle non funziona — il download dei singoli file resta regolare
 
 ### L'HDD non si monta dopo il riavvio
 - Controlla `/etc/fstab`: `sudo cat /etc/fstab`

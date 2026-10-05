@@ -4,6 +4,80 @@ const path    = require('path');
 const multer  = require('multer');
 const crypto  = require('crypto');
 
+// Libreria per comprimere le cartelle in ZIP al volo durante il download.
+// Caricamento difensivo come per "sharp": se manca, il download delle
+// cartelle viene semplicemente disabilitato invece di far crashare il server.
+let archiver = null;
+try {
+  archiver = require('archiver');
+} catch (e) {
+  console.warn('[cloud-zip] "archiver" non disponibile (', e.message, ') — il download delle cartelle come ZIP è disabilitato.');
+}
+
+// Job store in memoria per il download ZIP multiplo (selezione di più file/cartelle
+// insieme, non un'unica cartella). Il client prepara il job con POST (ottenendo un
+// id), poi lo scarica con una normale navigazione GET (che il browser può ricevere
+// in streaming senza bufferizzare tutto in memoria). Ogni job scade da solo dopo
+// pochi minuti se non viene mai scaricato, per non accumularsi indefinitamente.
+const zipJobs = new Map();
+const ZIP_JOB_TTL_MS = 5 * 60 * 1000;
+setInterval(() => {
+  const now = Date.now();
+  for (const [id, job] of zipJobs) {
+    if (now - job.created > ZIP_JOB_TTL_MS) zipJobs.delete(id);
+  }
+}, 60 * 1000).unref();
+
+// Crea le due route (prepare + download) per lo zip multiplo, con la stessa logica
+// per il cloud e per la libreria video — cambia solo la cartella radice.
+function registerZipMultiRoutes(prefix, root) {
+  app.post(`${prefix}/download-zip-multi/prepare`, cloudAuth, (req, res) => {
+    try {
+      const relPaths = Array.isArray(req.body.paths) ? req.body.paths : [];
+      if (!relPaths.length) return res.status(400).json({ error: 'Nessun elemento selezionato' });
+      const resolved = relPaths.map(p => safePath(root, p));
+      for (const p of resolved) {
+        if (!fs.existsSync(p)) return res.status(404).json({ error: 'Uno o più elementi selezionati non esistono più' });
+      }
+      const jobId = crypto.randomBytes(16).toString('hex');
+      zipJobs.set(jobId, { paths: resolved, created: Date.now() });
+      res.json({ job: jobId });
+    } catch (e) {
+      res.status(400).json({ error: e.message });
+    }
+  });
+
+  app.get(`${prefix}/download-zip-multi`, cloudAuth, (req, res) => {
+    if (!archiver) return res.status(501).json({ error: 'Funzione ZIP non disponibile sul server (manca il modulo "archiver").' });
+    const job = zipJobs.get(req.query.job);
+    if (!job) return res.status(404).send('Richiesta di download scaduta o non valida, riprova');
+    zipJobs.delete(req.query.job); // uso singolo, evita riusi accidentali dello stesso link
+
+    res.setHeader('Content-Disposition', `attachment; filename="selezione.zip"`);
+    res.setHeader('Content-Type', 'application/zip');
+
+    const archive = archiver('zip', { zlib: { level: 6 } });
+    archive.on('warning', err => console.warn('[zip-multi] warning:', err.message));
+    archive.on('error', err => {
+      console.error('[zip-multi] errore:', err.message);
+      if (!res.headersSent) res.status(500).end('Errore durante la creazione dello ZIP');
+      else res.end();
+    });
+
+    archive.pipe(res);
+    for (const p of job.paths) {
+      const name = path.basename(p);
+      try {
+        if (fs.statSync(p).isDirectory()) archive.directory(p, name);
+        else archive.file(p, { name });
+      } catch (e) {
+        console.warn('[zip-multi] elemento saltato (non più leggibile):', p, e.message);
+      }
+    }
+    archive.finalize();
+  });
+}
+
 // Libreria opzionale per generare le miniature a risoluzione ridotta.
 // Caricamento difensivo: se "sharp" non è installato (o l'installazione non è
 // compatibile con questo sistema) il server deve continuare a funzionare
@@ -435,6 +509,44 @@ app.get('/api/cloud/download', cloudAuth, (req, res) => {
   } catch (e) { res.status(400).json({ error: e.message }); }
 });
 
+// Download di una cartella come archivio ZIP generato al volo (in streaming,
+// senza mai scrivere un file .zip temporaneo su disco: i file vengono letti
+// e compressi mentre vengono inviati al browser).
+app.get('/api/cloud/download-zip', cloudAuth, (req, res) => {
+  if (!archiver) return res.status(501).json({ error: 'Funzione ZIP non disponibile sul server (manca il modulo "archiver").' });
+  try {
+    const dirPath = safePath(CLOUD_ROOT, req.query.path || '');
+    if (!fs.existsSync(dirPath) || !fs.statSync(dirPath).isDirectory()) {
+      return res.status(404).send('Cartella non trovata');
+    }
+    const folderName = path.basename(dirPath) || 'cloud';
+
+    res.setHeader('Content-Disposition', `attachment; filename="${encodeURIComponent(folderName)}.zip"`);
+    res.setHeader('Content-Type', 'application/zip');
+
+    const archive = archiver('zip', { zlib: { level: 6 } });
+
+    // Se qualcosa va storto a metà streaming (es. un file diventa illeggibile,
+    // come può capitare con dischi in condizioni precarie), logga e chiudi la
+    // risposta invece di far crashare il server.
+    archive.on('warning', err => {
+      console.warn('[cloud-zip] warning:', err.message);
+    });
+    archive.on('error', err => {
+      console.error('[cloud-zip] errore:', err.message);
+      if (!res.headersSent) res.status(500).end('Errore durante la creazione dello ZIP');
+      else res.end();
+    });
+
+    archive.pipe(res);
+    archive.directory(dirPath, false); // false = i file vanno alla radice dello zip, non dentro una sottocartella col nome della cartella completa
+    archive.finalize();
+  } catch (e) {
+    res.status(400).json({ error: e.message });
+  }
+});
+registerZipMultiRoutes('/api/cloud', CLOUD_ROOT);
+
 // Anteprima inline (senza download forzato, supporta range per i video, e miniature ridotte con ?thumb=1)
 app.get('/api/cloud/preview', cloudAuth, async (req, res) => {
   try {
@@ -675,6 +787,40 @@ app.get('/api/video/files/download', cloudAuth, (req, res) => {
     }
   } catch (e) { res.status(400).json({ error: e.message }); }
 });
+
+// Download di una cartella video come archivio ZIP generato al volo (stessa logica
+// della versione per il cloud, ma con radice VIDEO_ROOT).
+app.get('/api/video/files/download-zip', cloudAuth, (req, res) => {
+  if (!archiver) return res.status(501).json({ error: 'Funzione ZIP non disponibile sul server (manca il modulo "archiver").' });
+  try {
+    const dirPath = safePath(VIDEO_ROOT, req.query.path || '');
+    if (!fs.existsSync(dirPath) || !fs.statSync(dirPath).isDirectory()) {
+      return res.status(404).send('Cartella non trovata');
+    }
+    const folderName = path.basename(dirPath) || 'video';
+
+    res.setHeader('Content-Disposition', `attachment; filename="${encodeURIComponent(folderName)}.zip"`);
+    res.setHeader('Content-Type', 'application/zip');
+
+    const archive = archiver('zip', { zlib: { level: 6 } });
+
+    archive.on('warning', err => {
+      console.warn('[video-zip] warning:', err.message);
+    });
+    archive.on('error', err => {
+      console.error('[video-zip] errore:', err.message);
+      if (!res.headersSent) res.status(500).end('Errore durante la creazione dello ZIP');
+      else res.end();
+    });
+
+    archive.pipe(res);
+    archive.directory(dirPath, false);
+    archive.finalize();
+  } catch (e) {
+    res.status(400).json({ error: e.message });
+  }
+});
+registerZipMultiRoutes('/api/video/files', VIDEO_ROOT);
 
 // Anteprima inline dei file video (con supporto range per i video, e miniature ridotte con ?thumb=1)
 app.get('/api/video/files/preview', cloudAuth, async (req, res) => {

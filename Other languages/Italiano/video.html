@@ -164,6 +164,12 @@
     }
     .card:hover .card-overlay { opacity: 1; }
     .card:hover .play-btn { opacity: 1; transform: translate(-50%, -50%) scale(1); }
+    .card:hover .card-title {
+      white-space: normal;
+      overflow: visible;
+      text-overflow: unset;
+      word-break: break-word;
+    }
 
     .card-media {
       position: relative;
@@ -349,7 +355,7 @@
     .episode-list { display: flex; flex-direction: column; gap: 6px; }
     .episode-item {
       display: flex;
-      align-items: center;
+      align-items: flex-start;
       gap: 14px;
       padding: 10px 14px;
       border-radius: 8px;
@@ -367,6 +373,7 @@
       width: 28px;
       flex-shrink: 0;
       font-weight: 600;
+      line-height: 1.6;
     }
     .ep-label {
       font-size: 0.88rem;
@@ -374,15 +381,23 @@
       overflow: hidden;
       text-overflow: ellipsis;
       white-space: nowrap;
+      line-height: 1.6;
+    }
+    .ep-label.expanded {
+      white-space: normal;
+      overflow: visible;
+      text-overflow: unset;
+      word-break: break-word;
     }
     .ep-play {
       color: var(--accent);
       font-size: 0.9rem;
       flex-shrink: 0;
-      opacity: 0;
-      transition: opacity .15s;
+      opacity: 1;
+      line-height: 1.6;
+      padding: 2px 4px;
+      cursor: pointer;
     }
-    .episode-item:hover .ep-play { opacity: 1; }
 
     /* ── OVERLAY PLAYER ── */
     .player-backdrop {
@@ -974,8 +989,15 @@ function openSerieModal(serie) {
       el.innerHTML = `
         <span class="ep-num">${String(i + 1).padStart(2, '0')}</span>
         <span class="ep-label">${ep.label}</span>
-        <span class="ep-play">▶</span>`;
+        <span class="ep-play" title="Riproduci">▶</span>`;
+      // Click sulla riga (titolo/numero) → espande/comprime il testo su più righe,
+      // così su mobile si può leggere il titolo intero senza avviare subito il video.
       el.addEventListener('click', () => {
+        el.querySelector('.ep-label').classList.toggle('expanded');
+      });
+      // Click sul pulsante ▶ → riproduce subito, indipendentemente dallo stato espanso.
+      el.querySelector('.ep-play').addEventListener('click', (e) => {
+        e.stopPropagation();
         closeModal();
         playVideo(ep.file, `${serie.title} — ${ep.label}`);
       });
